@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>设计项目工作看板</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="orbital-background">
+    <div class="orbital"></div>
+    <div class="orbital"></div>
+    <div class="orbital"></div>
+  </div>
+  <div class="app-shell">
+    <aside class="sidebar glass-panel">
+      <div class="brand">
+        <div class="logo-glow"></div>
+        <h1>Atlas Design</h1>
+        <p>综合项目驾驶舱</p>
+      </div>
+      <section class="overview">
+        <h2>项目态势</h2>
+        <div class="overview-grid" id="overviewGrid"></div>
+      </section>
+      <section class="monthly-progress">
+        <div class="section-header">
+          <h2>月度推进</h2>
+          <span class="chip" id="currentMonth"></span>
+        </div>
+        <div class="progress-grid" id="monthlyProgress"></div>
+      </section>
+      <section class="reminders">
+        <div class="section-header">
+          <h2>提醒中心</h2>
+          <span class="chip critical" id="urgentCount">0</span>
+        </div>
+        <div class="reminder-list" id="reminderList"></div>
+      </section>
+    </aside>
+
+    <main class="main-panel">
+      <header class="main-header glass-panel">
+        <div>
+          <h2>工作看板</h2>
+          <p>实时掌握规划、方案、施工图项目的推进状态</p>
+        </div>
+        <div class="filter-group">
+          <label for="typeFilter">项目类别</label>
+          <select id="typeFilter">
+            <option value="all">全部</option>
+            <option value="规划设计">规划设计</option>
+            <option value="建筑方案">建筑方案</option>
+            <option value="施工图">施工图</option>
+          </select>
+        </div>
+      </header>
+
+      <section class="project-board glass-panel">
+        <div class="section-header">
+          <h3>项目概览</h3>
+          <button id="exportButton" class="ghost-button" disabled>导出当前项目记录</button>
+        </div>
+        <div class="project-grid" id="projectGrid"></div>
+      </section>
+
+      <section class="project-detail">
+        <div class="detail-column glass-panel" id="projectSummary">
+          <div class="detail-header">
+            <h3>项目摘要</h3>
+            <span class="status-badge" id="projectStatus"></span>
+          </div>
+          <div class="summary-body" id="projectSummaryBody"></div>
+          <div class="tag-row" id="projectTags"></div>
+        </div>
+        <div class="detail-column glass-panel timeline-column">
+          <div class="detail-header">
+            <h3>时间轴</h3>
+            <div class="toggle-group">
+              <button class="toggle-btn active" data-filter="all">全部</button>
+              <button class="toggle-btn" data-filter="milestone">里程碑</button>
+              <button class="toggle-btn" data-filter="risk">关注项</button>
+            </div>
+          </div>
+          <div class="timeline" id="timeline"></div>
+        </div>
+        <div class="detail-column glass-panel" id="eventDetail">
+          <div class="detail-header">
+            <h3>事件详情</h3>
+            <span class="chip" id="eventType"></span>
+          </div>
+          <div class="event-body" id="eventBody">
+            <p>从时间轴选择事件以查看甲方要求、责任人及最新进展。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="tasks-and-logs">
+        <div class="glass-panel task-panel">
+          <div class="detail-header">
+            <h3>任务协同</h3>
+            <span class="chip" id="taskCount"></span>
+          </div>
+          <div class="task-list" id="taskList"></div>
+        </div>
+        <div class="glass-panel log-panel">
+          <div class="detail-header">
+            <h3>工作记录</h3>
+            <button class="ghost-button" id="toggleLogForm">新增记录</button>
+          </div>
+          <form class="log-form hidden" id="logForm">
+            <div class="form-grid">
+              <label>关联项目
+                <select id="logProject"></select>
+              </label>
+              <label>记录时间
+                <input type="datetime-local" id="logTime" required />
+              </label>
+              <label>事件/节点
+                <input type="text" id="logEvent" placeholder="例如：方案深化沟通" required />
+              </label>
+              <label>对接人
+                <input type="text" id="logContact" placeholder="甲方负责人" required />
+              </label>
+              <label>任务内容
+                <input type="text" id="logTask" placeholder="提交深化资料" required />
+              </label>
+              <label>完成情况
+                <select id="logDone">
+                  <option value="进行中">进行中</option>
+                  <option value="已完成">已完成</option>
+                  <option value="待反馈">待反馈</option>
+                </select>
+              </label>
+              <label>提交内容
+                <textarea id="logSubmission" rows="2" placeholder="提交的文件、稿件或说明"></textarea>
+              </label>
+              <label>提交渠道
+                <input type="text" id="logChannel" placeholder="邮箱、腾讯会议等" />
+              </label>
+              <label>附件（图片）
+                <input type="file" id="logAttachment" accept="image/*" multiple />
+              </label>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="primary">保存记录</button>
+              <button type="button" class="ghost-button" id="cancelLog">取消</button>
+            </div>
+          </form>
+          <div class="log-table" id="logTable"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
