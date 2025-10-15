@@ -25,6 +25,27 @@
       <section class="overview">
         <h2>项目态势</h2>
         <div class="overview-grid" id="overviewGrid"></div>
+        <div class="type-overview" id="typeOverview"></div>
+      </section>
+      <section class="calendar-panel glass-panel" id="calendarPanel">
+        <div class="section-header">
+          <h2>项目日历</h2>
+          <div class="calendar-nav">
+            <button class="ghost-button icon" id="calendarPrev" aria-label="上一月">‹</button>
+            <span class="chip" id="calendarLabel"></span>
+            <button class="ghost-button icon" id="calendarNext" aria-label="下一月">›</button>
+          </div>
+        </div>
+        <div class="calendar-grid">
+          <div class="calendar-weekdays" id="calendarWeekdays"></div>
+          <div class="calendar-days" id="calendarDays"></div>
+        </div>
+        <div class="calendar-legend">
+          <span><i class="legend-dot timeline"></i>节点</span>
+          <span><i class="legend-dot task"></i>任务</span>
+          <span><i class="legend-dot log"></i>记录</span>
+        </div>
+        <div class="calendar-popover hidden" id="calendarPopover"></div>
       </section>
       <section class="monthly-progress">
         <div class="section-header">

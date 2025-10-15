@@ -1,3 +1,4 @@
+const defaultProjects = [
 const projects = [
   {
     id: 'plan-01',
@@ -295,6 +296,9 @@ const projects = [
   }
 ];
 
+const defaultWorkLogs = [
+  {
+    id: 'log-plan-traffic',
 const workLogs = [
   {
     projectId: 'plan-01',
@@ -313,6 +317,7 @@ const workLogs = [
     ]
   },
   {
+    id: 'log-scheme-fire',
     projectId: 'scheme-01',
     time: '2024-05-02T11:00',
     event: '消防反馈对接',
@@ -324,6 +329,7 @@ const workLogs = [
     attachments: []
   },
   {
+    id: 'log-cd-review',
     projectId: 'cd-01',
     time: '2024-05-06T09:20',
     event: '样板段现场复核',
@@ -341,6 +347,36 @@ const workLogs = [
   }
 ];
 
+const STORAGE_KEYS = {
+  projects: 'atlas-design-projects',
+  logs: 'atlas-design-worklogs'
+};
+
+const rawProjectState = loadState(STORAGE_KEYS.projects, defaultProjects);
+const rawLogState = loadState(STORAGE_KEYS.logs, defaultWorkLogs);
+
+let projects = rehydrateProjects(rawProjectState, defaultProjects);
+let workLogs = ensureLogIdentifiers(rehydrateLogs(rawLogState));
+
+let currentTypeFilter = 'all';
+let currentProjectId = null;
+let currentTimelineFilter = 'all';
+let calendarCursor = new Date();
+
+const timelineRegistry = new Map();
+let persistTimer = null;
+
+const overviewGrid = document.getElementById('overviewGrid');
+const typeOverviewContainer = document.getElementById('typeOverview');
+const monthlyProgressContainer = document.getElementById('monthlyProgress');
+const currentMonthLabel = document.getElementById('currentMonth');
+const calendarMonthLabel = document.getElementById('calendarLabel');
+const calendarWeekdayContainer = document.getElementById('calendarWeekdays');
+const calendarDaysContainer = document.getElementById('calendarDays');
+const calendarPrevBtn = document.getElementById('calendarPrev');
+const calendarNextBtn = document.getElementById('calendarNext');
+const calendarPanel = document.getElementById('calendarPanel');
+const calendarPopover = document.getElementById('calendarPopover');
 let currentTypeFilter = 'all';
 let currentProjectId = null;
 let currentTimelineFilter = 'all';
@@ -398,6 +434,9 @@ function init() {
   populateLogProjectOptions();
   renderLogTable();
   renderReminders();
+  renderCalendar();
+  setupListeners();
+  setupAutoSave();
   setupListeners();
   currentMonthLabel.textContent = new Date().toLocaleDateString('zh-CN', {
     month: 'long',
@@ -409,6 +448,7 @@ function init() {
   if (firstProject) {
     selectProject(firstProject.id);
   }
+  requestPersist(true);
 }
 
 function renderOverview() {
@@ -430,6 +470,11 @@ function renderOverview() {
     { label: '在研项目', value: total, sub: `${executing} 个执行中` },
     { label: '平均完成度', value: `${averageProgress}%`, sub: `${warning} 个预警项目` },
     {
+      label: '跨阶段协同',
+      value: `${typeStats['规划设计'] || 0} / ${typeStats['建筑方案'] || 0} / ${
+        typeStats['施工图'] || 0
+      }`,
+      sub: '规划-方案-施工全链路联动'
       label: '规划 / 方案 / 施工图',
       value: `${typeStats['规划设计'] || 0} / ${typeStats['建筑方案'] || 0} / ${typeStats['施工图'] || 0}`,
       sub: '多类型协同推进'
@@ -447,6 +492,151 @@ function renderOverview() {
     `;
     overviewGrid.appendChild(div);
   });
+
+  if (typeOverviewContainer) {
+    typeOverviewContainer.innerHTML = '';
+    const typeOrder = [
+      { key: '规划设计', label: '规划设计' },
+      { key: '建筑方案', label: '建筑方案' },
+      { key: '施工图', label: '施工图' }
+    ];
+    const counterRow = document.createElement('div');
+    counterRow.className = 'type-counter-row';
+    const now = new Date();
+    const allButton = document.createElement('button');
+    allButton.type = 'button';
+    allButton.className = 'type-counter';
+    allButton.dataset.type = 'all';
+    if (currentTypeFilter === 'all') {
+      allButton.classList.add('active');
+    }
+    allButton.setAttribute('aria-pressed', currentTypeFilter === 'all');
+    allButton.innerHTML = `
+      <span class="label">全部</span>
+      <strong>${projects.length}</strong>
+      <span class="meta">全局总览</span>
+    `;
+    allButton.addEventListener('click', () => applyTypeFilter('all'));
+    counterRow.appendChild(allButton);
+    typeOrder.forEach((entry) => {
+      const typedProjects = projects.filter((project) => project.type === entry.key);
+      const count = typedProjects.length;
+      const avgProgress =
+        count === 0
+          ? 0
+          : Math.round(
+              (typedProjects.reduce((sum, project) => sum + project.progress, 0) /
+                count) *
+                100
+            );
+      const warnings = typedProjects.filter((project) => project.status === '预警').length;
+      const handovers =
+        entry.key === '施工图'
+          ? typedProjects.filter((project) => project.progress >= 0.85).length
+          : typedProjects.filter((project) => project.progress >= 0.6).length;
+      const urgentTasks = typedProjects.reduce((sum, project) => {
+        return (
+          sum +
+          project.tasks.filter((task) => {
+            if (task.status === '完成') return false;
+            const due = new Date(task.due);
+            if (Number.isNaN(due.getTime())) return false;
+            const diffDays = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
+            return diffDays <= 3;
+          }).length
+        );
+      }, 0);
+
+      const counterButton = document.createElement('button');
+      counterButton.type = 'button';
+      counterButton.className = 'type-counter';
+      counterButton.dataset.type = entry.key;
+      if (currentTypeFilter === entry.key) {
+        counterButton.classList.add('active');
+      }
+      counterButton.setAttribute('aria-pressed', currentTypeFilter === entry.key);
+      counterButton.innerHTML = `
+        <span class="label">${entry.label}</span>
+        <strong>${count}</strong>
+        <span class="meta">平均 ${avgProgress}%</span>
+      `;
+      counterButton.addEventListener('click', () => applyTypeFilter(entry.key));
+      counterRow.appendChild(counterButton);
+
+      const card = document.createElement('div');
+      card.className = 'type-card';
+      card.dataset.type = entry.key;
+      if (!count) {
+        card.classList.add('empty');
+      }
+      if (currentTypeFilter === entry.key) {
+        card.classList.add('active');
+      }
+      card.tabIndex = 0;
+      card.innerHTML = `
+        <header>
+          <span>${entry.label}</span>
+          <strong>${count}</strong>
+        </header>
+        <div class="type-progress"><span style="width: ${avgProgress}%"></span></div>
+        <footer>
+          <span>${avgProgress}% 平均进度</span>
+          <span class="warning">预警 ${warnings}</span>
+          <span class="handover">${
+            handovers ? `${handoverLabel(entry.key)} ${handovers}` : '关注阶段衔接'
+          }</span>
+          <span class="urgent-count${urgentTasks ? ' active' : ''}">${
+            urgentTasks ? `紧迫任务 ${urgentTasks}` : '暂无紧急任务'
+          }</span>
+        </footer>
+      `;
+      card.addEventListener('click', () => {
+        applyTypeFilter(entry.key);
+      });
+      card.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          card.click();
+        }
+      });
+      typeOverviewContainer.appendChild(card);
+    });
+    typeOverviewContainer.prepend(counterRow);
+  }
+}
+
+function handoverLabel(type) {
+  if (type === '施工图') return '交付冲刺';
+  if (type === '建筑方案') return '待移交施工';
+  return '待移交方案';
+}
+
+function applyTypeFilter(type) {
+  currentTypeFilter = type;
+  if (typeFilterSelect) {
+    typeFilterSelect.value = type;
+  }
+  renderProjects();
+  renderReminders();
+  renderOverview();
+  const filtered = getFilteredProjects();
+  if (filtered.length) {
+    const fallback = filtered[0].id;
+    const existing = filtered.find((project) => project.id === currentProjectId);
+    selectProject(existing ? existing.id : fallback);
+  } else {
+    currentProjectId = null;
+    exportButton.disabled = true;
+    projectSummaryBody.innerHTML = '<p class="empty">请选择项目。</p>';
+    projectTags.innerHTML = '';
+    projectStatus.textContent = '';
+    delete projectStatus.dataset.status;
+    timelineContainer.innerHTML = '';
+    resetEventDetail();
+    taskList.innerHTML = '';
+    taskCount.textContent = '0 项';
+    renderLogTable();
+  }
 }
 
 function renderMonthlyProgress() {
@@ -484,6 +674,374 @@ function aggregateMonthlySnapshots() {
   return Array.from(map.values()).sort((a, b) => a.month.localeCompare(b.month));
 }
 
+function renderCalendar() {
+  if (!calendarDaysContainer || !calendarMonthLabel) return;
+  hideCalendarPopover();
+
+  if (calendarWeekdayContainer) {
+    const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+    calendarWeekdayContainer.innerHTML = '';
+    weekdays.forEach((weekday) => {
+      const cell = document.createElement('div');
+      cell.className = 'calendar-weekday';
+      cell.textContent = weekday;
+      calendarWeekdayContainer.appendChild(cell);
+    });
+  }
+
+  const baseDate = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth(), 1);
+  const year = baseDate.getFullYear();
+  const month = baseDate.getMonth();
+  calendarMonthLabel.textContent = `${year}年${String(month + 1).padStart(2, '0')}月`;
+
+  calendarDaysContainer.innerHTML = '';
+  const offset = (baseDate.getDay() + 6) % 7;
+  for (let i = 0; i < offset; i += 1) {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'calendar-day placeholder';
+    calendarDaysContainer.appendChild(placeholder);
+  }
+
+  const eventsMap = buildCalendarEventMap();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today = startOfDay(new Date());
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const events = eventsMap.get(key) || [];
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'calendar-day';
+    button.innerHTML = `<span class="date-number">${day}</span>`;
+    const ariaLabelParts = [`${year}年${String(month + 1).padStart(2, '0')}月${String(day).padStart(2, '0')}日`];
+    if (events.length) {
+      ariaLabelParts.push(`${events.length} 个事项`);
+    }
+    button.setAttribute('aria-label', ariaLabelParts.join('，'));
+
+    const currentDate = new Date(year, month, day);
+    if (startOfDay(currentDate).getTime() === today.getTime()) {
+      button.classList.add('today');
+    }
+
+    if (events.length) {
+      button.classList.add('has-event');
+      button.disabled = false;
+      const tooltipText = events.map(describeCalendarEvent).join('\n');
+      button.dataset.tooltip = tooltipText;
+      const badges = document.createElement('div');
+      badges.className = 'event-badges';
+      const typeSet = new Set(events.map((event) => event.source));
+      typeSet.forEach((type) => {
+        const dot = document.createElement('span');
+        dot.className = `event-dot ${type}`;
+        badges.appendChild(dot);
+      });
+      button.appendChild(badges);
+
+      const severity = events.reduce(
+        (acc, event) => {
+          if (event.severity === 'overdue') acc.overdue = true;
+          if (event.severity === 'urgent') acc.urgent = true;
+          if (event.severity === 'soon') acc.soon = true;
+          return acc;
+        },
+        { overdue: false, urgent: false, soon: false }
+      );
+      const severityLevel = severity.overdue
+        ? 'overdue'
+        : severity.urgent
+        ? 'urgent'
+        : severity.soon
+        ? 'soon'
+        : 'normal';
+      button.dataset.severity = severityLevel;
+      if (severity.overdue) {
+        button.classList.add('is-overdue', 'pulse');
+        button.style.setProperty('--pulse-color', 'rgba(255, 107, 107, 0.42)');
+      } else if (severity.urgent) {
+        button.classList.add('is-urgent', 'pulse');
+        button.style.setProperty('--pulse-color', 'rgba(255, 183, 77, 0.36)');
+      } else if (severity.soon) {
+        button.classList.add('is-soon');
+        button.style.setProperty('--pulse-color', 'rgba(77, 208, 225, 0.35)');
+      } else {
+        button.style.removeProperty('--pulse-color');
+      }
+
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        showCalendarPopover(events, button);
+      });
+    } else {
+      button.disabled = true;
+    }
+
+    calendarDaysContainer.appendChild(button);
+  }
+}
+
+function buildCalendarEventMap() {
+  const map = new Map();
+  const today = startOfDay(new Date());
+
+  const pushEvent = (event) => {
+    if (!event.dateKey) return;
+    if (!map.has(event.dateKey)) {
+      map.set(event.dateKey, []);
+    }
+    const bucket = map.get(event.dateKey);
+    const eventDate = startOfDay(event.datetime ? new Date(event.datetime) : new Date(event.dateKey));
+    const diffDays = Math.ceil((eventDate - today) / (1000 * 60 * 60 * 24));
+    let severity = 'normal';
+    if (diffDays < 0) severity = 'overdue';
+    else if (diffDays <= 3) severity = 'urgent';
+    else if (diffDays <= 7) severity = 'soon';
+    event.severity = severity;
+    bucket.push(event);
+  };
+
+  projects.forEach((project) => {
+    const baseInfo = { projectId: project.id, projectName: project.name, projectType: project.type };
+    (project.timeline || []).forEach((item) => {
+      const dateKey = normalizeDateKey(item.date);
+      if (!dateKey) return;
+      pushEvent({
+        ...baseInfo,
+        id: item.id,
+        title: item.title,
+        detail: item.description,
+        source: 'timeline',
+        type: item.type,
+        status: item.status,
+        dateKey,
+        datetime: item.date
+      });
+    });
+
+    (project.tasks || []).forEach((task) => {
+      if (!task.due || task.status === '完成') return;
+      const dateKey = normalizeDateKey(task.due);
+      if (!dateKey) return;
+      pushEvent({
+        ...baseInfo,
+        id: `task-${task.id || task.title}`,
+        title: task.title,
+        detail: `责任人：${task.owner}`,
+        source: 'task',
+        type: 'task',
+        status: task.status,
+        priority: task.priority,
+        dateKey,
+        datetime: task.due,
+        taskRef: task
+      });
+    });
+  });
+
+  workLogs.forEach((log) => {
+    const project = projects.find((item) => item.id === log.projectId);
+    if (!project) return;
+    const dateKey = normalizeDateKey(log.time);
+    if (!dateKey) return;
+    pushEvent({
+      projectId: project.id,
+      projectName: project.name,
+      projectType: project.type,
+      id: `log-${log.id}`,
+      title: log.event,
+      detail: log.task,
+      source: 'log',
+      type: 'log',
+      status: log.done,
+      dateKey,
+      datetime: log.time,
+      logRef: log
+    });
+  });
+
+  map.forEach((events) => {
+    events.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+  });
+
+  return map;
+}
+
+function describeCalendarEvent(event) {
+  const typeLabel =
+    event.source === 'timeline'
+      ? event.type === 'milestone'
+        ? '里程碑'
+        : event.type === 'risk'
+        ? '风险'
+        : '节点'
+      : event.source === 'task'
+      ? '任务'
+      : '记录';
+  const statusLabel = event.status ? ` · ${event.status}` : '';
+  return `【${event.projectName}】${event.projectType} · ${typeLabel} · ${event.title}${statusLabel}`;
+}
+
+function buildTimelineEntries(project) {
+  const entries = [];
+  const baseInfo = { projectId: project.id, projectName: project.name };
+
+  (project.timeline || []).forEach((event) => {
+    entries.push({
+      ...event,
+      ...baseInfo,
+      source: 'timeline',
+      datetime: event.date,
+      id: event.id
+    });
+  });
+
+  (project.tasks || []).forEach((task) => {
+    if (!task.due) return;
+    entries.push({
+      ...baseInfo,
+      id: `task-${task.id || task.title}`,
+      title: task.title,
+      description: task.taskDescription || '',
+      owner: task.owner,
+      status: task.status,
+      priority: task.priority,
+      type: 'task',
+      source: 'task',
+      datetime: task.due,
+      date: task.due,
+      taskRef: task
+    });
+  });
+
+  workLogs
+    .filter((log) => log.projectId === project.id)
+    .forEach((log) => {
+      entries.push({
+        ...baseInfo,
+        id: `log-${log.id}`,
+        title: log.event,
+        description: log.task,
+        owner: log.contact,
+        status: log.done,
+        channel: log.channel,
+        submission: log.submission,
+        attachments: log.attachments,
+        type: 'log',
+        source: 'log',
+        datetime: log.time,
+        date: log.time,
+        logRef: log
+      });
+    });
+
+  return entries.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+}
+
+function formatTimelineDate(dateStr) {
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return dateStr;
+  const hasTime = typeof dateStr === 'string' && dateStr.includes('T');
+  const options = hasTime
+    ? { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }
+    : { month: '2-digit', day: '2-digit' };
+  return date.toLocaleString('zh-CN', options);
+}
+
+function normalizeDateKey(dateStr) {
+  if (!dateStr) return null;
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate()
+  ).padStart(2, '0')}`;
+}
+
+function startOfDay(date) {
+  const value = new Date(date.getTime());
+  value.setHours(0, 0, 0, 0);
+  return value;
+}
+
+function showCalendarPopover(events, anchor) {
+  if (!calendarPopover || !calendarPanel) {
+    navigateToEvent(events[0]);
+    return;
+  }
+  calendarPopover.innerHTML = '';
+  const header = document.createElement('header');
+  const dayNumber = Number(anchor.querySelector('.date-number').textContent);
+  const displayDate = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth(), dayNumber);
+  header.textContent = `${displayDate.getFullYear()}年${String(displayDate.getMonth() + 1).padStart(2, '0')}月${String(
+    displayDate.getDate()
+  ).padStart(2, '0')}日事项`;
+  calendarPopover.appendChild(header);
+  const list = document.createElement('div');
+  list.className = 'popover-list';
+  events.forEach((event) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `popover-item ${event.source}`;
+    item.innerHTML = `
+      <strong>${event.projectName}</strong>
+      <span>${event.title}</span>
+      <span class="meta">${event.projectType} · ${
+      event.source === 'task' ? '任务' : event.source === 'log' ? '记录' : '节点'
+    }${event.status ? ` · ${event.status}` : ''}</span>
+    `;
+    item.addEventListener('click', (clickEvent) => {
+      clickEvent.stopPropagation();
+      hideCalendarPopover();
+      navigateToEvent(event);
+    });
+    list.appendChild(item);
+  });
+  calendarPopover.appendChild(list);
+  calendarPopover.classList.remove('hidden');
+
+  requestAnimationFrame(() => {
+    const anchorRect = anchor.getBoundingClientRect();
+    const panelRect = calendarPanel.getBoundingClientRect();
+    const popRect = calendarPopover.getBoundingClientRect();
+    let left = anchorRect.left - panelRect.left + anchorRect.width / 2 - popRect.width / 2;
+    left = Math.max(12, Math.min(left, panelRect.width - popRect.width - 12));
+    const top = anchorRect.bottom - panelRect.top + 12;
+    calendarPopover.style.left = `${left}px`;
+    calendarPopover.style.top = `${top}px`;
+  });
+}
+
+function hideCalendarPopover() {
+  if (!calendarPopover) return;
+  calendarPopover.classList.add('hidden');
+}
+
+function navigateToEvent(eventRef) {
+  if (!eventRef) return;
+  if (currentTimelineFilter !== 'all') {
+    currentTimelineFilter = 'all';
+    toggleButtons.forEach((button) => {
+      button.classList.toggle('active', button.dataset.filter === 'all');
+    });
+  }
+  selectProject(eventRef.projectId);
+  setTimeout(() => {
+    highlightTimelineEvent(eventRef.projectId, eventRef.id);
+  }, 120);
+}
+
+function highlightTimelineEvent(projectId, eventId) {
+  const events = timelineRegistry.get(projectId) || [];
+  const event = events.find((item) => item.id === eventId);
+  if (!event) return;
+  const element = timelineContainer.querySelector(`[data-event-id="${eventId}"]`);
+  if (!element) return;
+  document.querySelectorAll('.timeline-item').forEach((el) => el.classList.remove('active'));
+  element.classList.add('active');
+  element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  renderEventDetail(event);
+}
+
 function getFilteredProjects() {
   if (currentTypeFilter === 'all') return [...projects];
   return projects.filter((p) => p.type === currentTypeFilter);
@@ -516,6 +1074,7 @@ function renderProjects() {
     projectGrid.innerHTML = '<p class="empty">当前类别暂无项目。</p>';
   }
   renderBoardOverview();
+  renderCalendar();
 }
 
 function renderBoardOverview() {
@@ -778,11 +1337,48 @@ function renderProjectSummary(project) {
 
 function renderTimeline(project) {
   timelineContainer.innerHTML = '';
+  const events = buildTimelineEntries(project);
+  timelineRegistry.set(project.id, events);
+  const filtered = events.filter((event) => {
   const events = project.timeline.filter((event) => {
     if (currentTimelineFilter === 'milestone') return event.type === 'milestone';
     if (currentTimelineFilter === 'risk') return event.type === 'risk';
     return true;
   });
+
+  filtered.forEach((event) => {
+    const item = document.createElement('div');
+    item.className = 'timeline-item';
+    item.dataset.type = event.type;
+    item.dataset.source = event.source;
+    item.dataset.eventId = event.id;
+    const metaLabel =
+      event.source === 'task'
+        ? `${event.status}${event.priority ? ` · ${event.priority}` : ''}`
+        : event.status || '';
+    const summary =
+      event.source === 'task'
+        ? `责任人：${event.owner || '—'}`
+        : event.source === 'log'
+        ? `对接：${event.owner || '—'}${event.description ? ` · ${event.description}` : ''}`
+        : event.description || '';
+    item.innerHTML = `
+      <div class="timeline-meta">
+        <span>${formatTimelineDate(event.datetime || event.date)}</span>
+        <span>${metaLabel}</span>
+      </div>
+      <h4>${event.title}</h4>
+      <p>${summary}</p>
+    `;
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.timeline-item').forEach((el) => el.classList.remove('active'));
+      item.classList.add('active');
+      renderEventDetail(event);
+    });
+    timelineContainer.appendChild(item);
+  });
+
+  if (!filtered.length) {
   events
     .sort((a, b) => new Date(a.date) - new Date(b.date))
     .forEach((event) => {
@@ -810,10 +1406,57 @@ function renderTimeline(project) {
 }
 
 function renderEventDetail(event) {
+  if (!event) return;
+  if (event.source === 'log') {
+    const log = event.logRef || workLogs.find((item) => `log-${item.id}` === event.id);
+    if (!log) return;
+    eventType.textContent = '工作记录';
+    eventBody.innerHTML = `
+      <div><strong>记录时间：</strong>${formatDateTime(log.time)}</div>
+      <div><strong>事件：</strong>${log.event}</div>
+      <div><strong>对接人：</strong>${log.contact}</div>
+      <div><strong>任务内容：</strong>${log.task}</div>
+      <div><strong>完成情况：</strong>${log.done}</div>
+      <div><strong>提交内容：</strong>${log.submission || '—'}</div>
+      <div><strong>渠道：</strong>${log.channel || '—'}</div>
+    `;
+    if (log.attachments && log.attachments.length) {
+      const attachmentWrap = document.createElement('div');
+      attachmentWrap.className = 'attachment-preview';
+      log.attachments.forEach((file) => {
+        const img = document.createElement('img');
+        img.src = file.url;
+        img.alt = file.name;
+        img.title = file.path || file.name;
+        attachmentWrap.appendChild(img);
+      });
+      eventBody.appendChild(attachmentWrap);
+    }
+    return;
+  }
+
+  if (event.source === 'task') {
+    const task = event.taskRef;
+    eventType.textContent = '任务节点';
+    eventBody.innerHTML = `
+      <div><strong>任务名称：</strong>${event.title}</div>
+      <div><strong>责任人：</strong>${event.owner}</div>
+      <div><strong>截止日期：</strong>${formatDate(event.date)}</div>
+      <div><strong>优先级：</strong>${event.priority || '—'}</div>
+      <div><strong>当前状态：</strong>${event.status}</div>
+      <div><strong>说明：</strong>${(task && task.notes) || '—'}</div>
+    `;
+    return;
+  }
+
   eventType.textContent = event.type === 'milestone' ? '里程碑' : event.type === 'risk' ? '关注' : '推进';
   eventBody.innerHTML = `
     <div><strong>事件名称：</strong>${event.title}</div>
     <div><strong>日期：</strong>${formatDate(event.date)}</div>
+    <div><strong>甲方要求：</strong>${event.clientRequest || '—'}</div>
+    <div><strong>责任人：</strong>${event.owner || '—'}</div>
+    <div><strong>当前状态：</strong>${event.status || '—'}</div>
+    <div><strong>工作情况：</strong>${event.notes || event.description || '—'}</div>
     <div><strong>甲方要求：</strong>${event.clientRequest}</div>
     <div><strong>责任人：</strong>${event.owner}</div>
     <div><strong>当前状态：</strong>${event.status}</div>
@@ -856,6 +1499,11 @@ function renderTasks(project) {
       card.querySelector('[data-action="advance"]').addEventListener('click', () => {
         task.status = task.status === '完成' ? '进行中' : '完成';
         renderTasks(project);
+        renderOverview();
+        renderReminders();
+        renderBoardOverview();
+        renderCalendar();
+        requestPersist();
         renderReminders();
         renderBoardOverview();
       });
@@ -957,6 +1605,7 @@ function renderLogTable() {
         const img = document.createElement('img');
         img.src = file.url;
         img.alt = file.name;
+        img.title = file.path || file.name;
         img.title = file.name;
         attachmentWrap.appendChild(img);
       });
@@ -968,6 +1617,7 @@ function renderLogTable() {
 
 function setupListeners() {
   typeFilterSelect.addEventListener('change', (event) => {
+    applyTypeFilter(event.target.value);
     currentTypeFilter = event.target.value;
     renderProjects();
     const filtered = getFilteredProjects();
@@ -1023,12 +1673,24 @@ function setupListeners() {
     workLogs.push(newLog);
     logForm.reset();
     logForm.classList.add('hidden');
+    const defaultProject = currentProjectId || newLog.projectId;
+    if (defaultProject) {
+      logProjectSelect.value = defaultProject;
     if (currentProjectId) {
       logProjectSelect.value = currentProjectId;
     }
     const now = new Date();
     logTimeInput.value = `${now.toISOString().slice(0, 16)}`;
     renderLogTable();
+    if (currentProjectId) {
+      const project = projects.find((p) => p.id === currentProjectId);
+      if (project) {
+        renderTimeline(project);
+        highlightTimelineEvent(project.id, `log-${newLog.id}`);
+      }
+    }
+    renderCalendar();
+    requestPersist();
   });
 
   if (addProjectButton) {
@@ -1060,6 +1722,8 @@ function setupListeners() {
       renderProjects();
       renderReminders();
       selectProject(project.id);
+      renderCalendar();
+      requestPersist();
     });
   }
 
@@ -1073,6 +1737,8 @@ function setupListeners() {
       renderProjects();
       renderReminders();
       selectProject(project.id);
+      renderCalendar();
+      requestPersist();
     });
   }
 
@@ -1114,10 +1780,42 @@ function setupListeners() {
         taskList.innerHTML = '';
         taskCount.textContent = '0 项';
       }
+      renderCalendar();
+      requestPersist();
     });
   }
 
   exportButton.addEventListener('click', exportCurrentProjectLogs);
+
+  if (calendarPrevBtn) {
+    calendarPrevBtn.addEventListener('click', () => {
+      calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1);
+      renderCalendar();
+    });
+  }
+
+  if (calendarNextBtn) {
+    calendarNextBtn.addEventListener('click', () => {
+      calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 1);
+      renderCalendar();
+    });
+  }
+
+  document.addEventListener('click', (event) => {
+    if (!calendarPopover || calendarPopover.classList.contains('hidden')) return;
+    if (
+      !calendarPopover.contains(event.target) &&
+      !event.target.closest('.calendar-day.has-event')
+    ) {
+      hideCalendarPopover();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      hideCalendarPopover();
+    }
+  });
 }
 
 function openProjectForm() {
@@ -1203,6 +1901,8 @@ function handleProjectFormSubmit(event) {
   populateLogProjectOptions();
   renderReminders();
   selectProject(newProject.id);
+  renderCalendar();
+  requestPersist();
 }
 
 function toArrayFromInput(value) {
@@ -1250,6 +1950,16 @@ function getNextProjectType(type) {
   return '交付运营';
 }
 
+function generateLogId() {
+  let base = Date.now();
+  let candidate = `log-${base}`;
+  while (workLogs.some((log) => log.id === candidate)) {
+    base += 1;
+    candidate = `log-${base}`;
+  }
+  return candidate;
+}
+
 async function buildLogFromForm() {
   const projectId = logProjectSelect.value || currentProjectId;
   const time = document.getElementById('logTime').value;
@@ -1262,6 +1972,7 @@ async function buildLogFromForm() {
   const attachmentsInput = document.getElementById('logAttachment');
   const attachments = await readFilesAsDataUrl(attachmentsInput.files);
   return {
+    id: generateLogId(),
     projectId,
     time,
     event: eventName,
@@ -1280,6 +1991,12 @@ function readFilesAsDataUrl(fileList) {
   const readers = files.map((file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
+      reader.onload = () =>
+        resolve({
+          name: file.name,
+          url: reader.result,
+          path: file.webkitRelativePath || file.name
+        });
       reader.onload = () => resolve({ name: file.name, url: reader.result });
       reader.onerror = reject;
       reader.readAsDataURL(file);
@@ -1305,6 +2022,7 @@ function exportCurrentProjectLogs() {
     log.done,
     log.submission || '',
     log.channel || '',
+    (log.attachments || []).map((file) => file.path || file.name).join('、')
     (log.attachments || []).map((file) => file.name).join('、')
   ]);
   const csvContent = [header, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
@@ -1346,6 +2064,143 @@ function formatDateTime(dateTimeStr) {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+function rehydrateProjects(list, fallback) {
+  const fallbackMap = new Map((fallback || []).map((item) => [item.id, item]));
+  return (list || []).map((item) => {
+    const base = fallbackMap.get(item.id) || {};
+    const timeline = Array.isArray(item.timeline) ? item.timeline : base.timeline || [];
+    const tasks = Array.isArray(item.tasks) ? item.tasks : base.tasks || [];
+    const monthlyProgress = Array.isArray(item.monthlyProgress)
+      ? item.monthlyProgress
+      : base.monthlyProgress || [];
+    const tags = Array.isArray(item.tags) ? item.tags : base.tags || [];
+    const team = Array.isArray(item.team) ? item.team : base.team || [];
+    const normalizedProgress = normalizeProgressValue(
+      typeof item.progress === 'number'
+        ? item.progress
+        : typeof item.progressPercent === 'number'
+        ? item.progressPercent / 100
+        : typeof base.progress === 'number'
+        ? base.progress
+        : 0
+    );
+    return {
+      ...base,
+      ...item,
+      progress: normalizedProgress,
+      timeline,
+      tasks,
+      monthlyProgress: monthlyProgress.map((entry) => ({
+        month: entry.month,
+        completion: typeof entry.completion === 'number' ? entry.completion : Number(entry.completion) || 0,
+        deliveries: typeof entry.deliveries === 'number' ? entry.deliveries : Number(entry.deliveries) || 0,
+        risks: typeof entry.risks === 'number' ? entry.risks : Number(entry.risks) || 0
+      })),
+      tags,
+      team
+    };
+  });
+}
+
+function rehydrateLogs(list) {
+  return (list || []).map((item) => ({
+    ...item,
+    attachments: Array.isArray(item.attachments) ? item.attachments : []
+  }));
+}
+
+function ensureLogIdentifiers(logs) {
+  const used = new Set();
+  return (logs || []).map((log) => {
+    const clone = { ...log };
+    if (!clone.id) {
+      let seed = Date.now() + Math.floor(Math.random() * 1000);
+      let candidate = `log-${seed}`;
+      while (used.has(candidate)) {
+        seed += 1;
+        candidate = `log-${seed}`;
+      }
+      clone.id = candidate;
+    }
+    used.add(clone.id);
+    if (!clone.attachments) {
+      clone.attachments = [];
+    }
+    return clone;
+  });
+}
+
+function normalizeProgressValue(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 0;
+  if (value > 1) {
+    return Math.min(1, value / 100);
+  }
+  return Math.min(1, Math.max(0, value));
+}
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function requestPersist(immediate = false) {
+  if (typeof window === 'undefined') return;
+  if (immediate) {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    persistState();
+    return;
+  }
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+  }
+  persistTimer = window.setTimeout(() => {
+    persistState();
+    persistTimer = null;
+  }, 260);
+}
+
+function loadState(key, fallback) {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return deepClone(fallback);
+    }
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      return deepClone(fallback);
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return deepClone(fallback);
+    }
+    return parsed;
+  } catch (error) {
+    console.warn('读取本地数据失败，使用默认数据。', error);
+    return deepClone(fallback);
+  }
+}
+
+function setupAutoSave() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  window.addEventListener('beforeunload', () => requestPersist(true));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      requestPersist(true);
+    }
+  });
+}
+
+function persistState() {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(STORAGE_KEYS.projects, JSON.stringify(projects));
+    window.localStorage.setItem(STORAGE_KEYS.logs, JSON.stringify(workLogs));
+  } catch (error) {
+    console.warn('自动保存失败', error);
+  }
 }
 
 init();
