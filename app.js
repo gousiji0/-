@@ -349,11 +349,9 @@ const STORAGE_KEYS = {
   logs: 'atlas-design-worklogs'
 };
 
-const rawProjectState = loadState(STORAGE_KEYS.projects, defaultProjects);
-const rawLogState = loadState(STORAGE_KEYS.logs, defaultWorkLogs);
-
-let projects = rehydrateProjects(rawProjectState, defaultProjects);
-let workLogs = ensureLogIdentifiers(rehydrateLogs(rawLogState));
+let persistenceMode = 'localStorage';
+let projects = [];
+let workLogs = [];
 
 let currentTypeFilter = 'all';
 let currentProjectId = null;
@@ -2366,7 +2364,7 @@ async function buildLogFromForm() {
   const submission = document.getElementById('logSubmission').value;
   const channel = document.getElementById('logChannel').value;
   const attachmentsInput = document.getElementById('logAttachment');
-  const attachments = await readFilesAsDataUrl(attachmentsInput.files);
+  const attachments = await collectAttachments(attachmentsInput.files);
   const milestone = logMilestoneInput ? logMilestoneInput.checked : false;
   const focus = logFocusInput ? logFocusInput.checked : false;
   const asTaskFlag = logMarkTaskInput ? logMarkTaskInput.checked : false;
@@ -2394,18 +2392,36 @@ async function buildLogFromForm() {
   };
 }
 
-function readFilesAsDataUrl(fileList) {
+async function collectAttachments(fileList) {
   const files = Array.from(fileList || []);
-  if (!files.length) return Promise.resolve([]);
+  if (!files.length) return [];
+
+  if (window.electronAPI && window.electronAPI.storeAttachments) {
+    try {
+      const payload = files.map((file) => ({
+        name: file.name,
+        path: file.path || file.webkitRelativePath || file.name
+      }));
+      const stored = await window.electronAPI.storeAttachments(payload);
+      if (Array.isArray(stored)) {
+        return stored.map((item) => normalizeAttachmentEntry(item)).filter(Boolean);
+      }
+    } catch (error) {
+      console.warn('附件保存失败，将使用临时数据。', error);
+    }
+  }
+
   const readers = files.map((file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () =>
-        resolve({
-          name: file.name,
-          url: reader.result,
-          path: file.webkitRelativePath || file.name
-        });
+        resolve(
+          normalizeAttachmentEntry({
+            name: file.name,
+            url: reader.result,
+            path: file.webkitRelativePath || file.name
+          })
+        );
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
@@ -2551,7 +2567,9 @@ function rehydrateLogs(list) {
     return {
       ...item,
       done: doneStatus,
-      attachments: Array.isArray(item.attachments) ? item.attachments : [],
+      attachments: Array.isArray(item.attachments)
+        ? item.attachments.map((file) => normalizeAttachmentEntry(file)).filter(Boolean)
+        : [],
       asTask: Boolean(item.asTask) || logStatusIndicatesTask(doneStatus),
       milestone: Boolean(item.milestone),
       focus: Boolean(item.focus),
@@ -2592,6 +2610,29 @@ function ensureLogIdentifiers(logs) {
   });
 }
 
+function normalizeAttachmentEntry(file) {
+  if (!file) return null;
+  const attachment = {
+    name: file.name || file.title || '附件',
+    path: file.path || '',
+    url: file.url || ''
+  };
+  if (!attachment.path && typeof file.url === 'string' && file.url.startsWith('file://')) {
+    attachment.path = decodeURIComponent(file.url.replace('file://', ''));
+  }
+  if (!attachment.url && attachment.path) {
+    attachment.url = toFileUrl(attachment.path);
+  }
+  return attachment;
+}
+
+function toFileUrl(filePath) {
+  if (!filePath) return '';
+  if (filePath.startsWith('file://')) return filePath;
+  const normalized = filePath.replace(/\\/g, '/');
+  return `file://${encodeURI(normalized)}`;
+}
+
 function normalizeProgressValue(value) {
   if (typeof value !== 'number' || Number.isNaN(value)) return 0;
   if (value > 1) {
@@ -2611,19 +2652,25 @@ function requestPersist(immediate = false) {
       clearTimeout(persistTimer);
       persistTimer = null;
     }
-    persistState();
+    const result = persistState();
+    if (result && typeof result.catch === 'function') {
+      result.catch((error) => console.warn('保存数据失败', error));
+    }
     return;
   }
   if (persistTimer) {
     clearTimeout(persistTimer);
   }
   persistTimer = window.setTimeout(() => {
-    persistState();
+    const result = persistState();
+    if (result && typeof result.catch === 'function') {
+      result.catch((error) => console.warn('保存数据失败', error));
+    }
     persistTimer = null;
   }, 260);
 }
 
-function loadState(key, fallback) {
+function loadFromLocalStorage(key, fallback) {
   try {
     if (typeof window === 'undefined' || !window.localStorage) {
       return deepClone(fallback);
@@ -2654,13 +2701,60 @@ function setupAutoSave() {
 }
 
 function persistState() {
-  if (typeof window === 'undefined' || !window.localStorage) return;
+  if (persistenceMode === 'electron' && window.electronAPI && window.electronAPI.saveState) {
+    return window.electronAPI.saveState({
+      projects,
+      logs: workLogs
+    });
+  }
+  if (typeof window === 'undefined' || !window.localStorage) return Promise.resolve();
   try {
     window.localStorage.setItem(STORAGE_KEYS.projects, JSON.stringify(projects));
     window.localStorage.setItem(STORAGE_KEYS.logs, JSON.stringify(workLogs));
   } catch (error) {
     console.warn('自动保存失败', error);
   }
+  return Promise.resolve();
 }
 
-init();
+async function bootstrap() {
+  let projectState = null;
+  let logState = null;
+
+  if (window.electronAPI && window.electronAPI.loadState) {
+    try {
+      const stored = await window.electronAPI.loadState();
+      if (stored && Array.isArray(stored.projects)) {
+        projectState = stored.projects;
+      }
+      if (stored && Array.isArray(stored.logs)) {
+        logState = stored.logs;
+      }
+      persistenceMode = 'electron';
+    } catch (error) {
+      console.warn('读取文件存储失败，回退到浏览器本地存储。', error);
+      persistenceMode = 'localStorage';
+    }
+  }
+
+  if (persistenceMode === 'localStorage') {
+    const fallbackProjects = loadFromLocalStorage(STORAGE_KEYS.projects, defaultProjects);
+    const fallbackLogs = loadFromLocalStorage(STORAGE_KEYS.logs, defaultWorkLogs);
+    projectState = Array.isArray(projectState) ? projectState : fallbackProjects;
+    logState = Array.isArray(logState) ? logState : fallbackLogs;
+  }
+
+  const projectSource = Array.isArray(projectState) && projectState.length ? projectState : defaultProjects;
+  const logSource = Array.isArray(logState) && logState.length ? logState : defaultWorkLogs;
+
+  projects = rehydrateProjects(projectSource, defaultProjects);
+  workLogs = ensureLogIdentifiers(rehydrateLogs(logSource));
+
+  init();
+
+  if (persistenceMode === 'electron' && (!projectState || !projectState.length || !logState || !logState.length)) {
+    requestPersist(true);
+  }
+}
+
+bootstrap();

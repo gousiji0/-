@@ -1,0 +1,40 @@
+{
+  "name": "atlas-design-board",
+  "version": "1.0.0",
+  "description": "设计公司项目工作看板",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.atlas.design.board",
+    "productName": "Atlas Design Board",
+    "files": [
+      "index.html",
+      "app.js",
+      "styles.css",
+      "main.js",
+      "preload.js",
+      "storage.js",
+      "storage/**/*",
+      "README.md"
+    ],
+    "directories": {
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "Atlas-Design-Board-${version}.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^28.2.3",
+    "electron-builder": "^24.13.3"
+  }
+}
