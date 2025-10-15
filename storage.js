@@ -7,13 +7,33 @@ let attachmentsDir = null;
 
 async function init(app) {
   const appRoot = app.getAppPath();
-  const candidate = path.join(appRoot, 'storage');
+  const exeDirectory = path.dirname(app.getPath('exe'));
+  const userDataDirectory = path.join(app.getPath('userData'), 'storage');
 
-  storageRoot = await ensureWritableDirectory(candidate);
-  if (!storageRoot) {
-    const fallback = path.join(app.getPath('userData'), 'storage');
-    storageRoot = await ensureWritableDirectory(fallback, true);
+  const candidates = new Set();
+
+  if (app.isPackaged()) {
+    candidates.add(path.join(exeDirectory, 'storage'));
   }
+
+  candidates.add(path.join(appRoot, 'storage'));
+
+  if (!app.isPackaged()) {
+    // 在开发模式下优先使用项目根目录的 storage 目录，便于调试。
+    candidates.add(path.join(process.cwd(), 'storage'));
+  }
+
+  candidates.add(userDataDirectory);
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const dir = await ensureWritableDirectory(candidate);
+    if (dir) {
+      storageRoot = dir;
+      break;
+    }
+  }
+
   if (!storageRoot) {
     throw new Error('无法找到可写入的存储目录');
   }

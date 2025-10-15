@@ -10,6 +10,7 @@ npm start
 ```
 
 启动后会打开桌面程序窗口，所有项目、工作记录与附件会自动保存到 `storage/state.json` 与 `storage/attachments/`。
+开发模式下该目录位于项目根目录；打包后的可执行文件会在同级目录生成并读取 `storage` 文件夹，实现随程序携带的数据持久化。
 
 ## 构建 Windows 可执行文件
 
