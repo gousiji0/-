@@ -62,9 +62,73 @@
       <section class="project-board glass-panel">
         <div class="section-header">
           <h3>项目概览</h3>
-          <button id="exportButton" class="ghost-button" disabled>导出当前项目记录</button>
+          <div class="board-actions">
+            <button id="addProjectButton" class="primary">新增项目</button>
+            <button id="exportButton" class="ghost-button" disabled>导出当前项目记录</button>
+          </div>
         </div>
+        <div class="portfolio-summary hidden" id="boardOverview"></div>
+        <div class="push-alerts hidden" id="pushAlertList"></div>
         <div class="project-grid" id="projectGrid"></div>
+      </section>
+
+      <section class="project-form-panel glass-panel hidden" id="projectFormPanel">
+        <div class="detail-header">
+          <h3 id="projectFormTitle">新增项目</h3>
+          <button class="ghost-button" id="closeProjectForm">收起</button>
+        </div>
+        <form id="projectForm">
+          <div class="form-grid project-form-grid">
+            <label>项目名称
+              <input type="text" id="projectNameInput" placeholder="请输入项目名称" required />
+            </label>
+            <label>项目类别
+              <select id="projectTypeInput" required>
+                <option value="规划设计">规划设计</option>
+                <option value="建筑方案">建筑方案</option>
+                <option value="施工图">施工图</option>
+              </select>
+            </label>
+            <label>项目状态
+              <select id="projectStatusInput" required>
+                <option value="执行中">执行中</option>
+                <option value="预警">预警</option>
+                <option value="完成">完成</option>
+                <option value="筹备">筹备</option>
+              </select>
+            </label>
+            <label>负责人
+              <input type="text" id="projectManagerInput" placeholder="项目负责人" required />
+            </label>
+            <label>甲方单位
+              <input type="text" id="projectClientInput" placeholder="甲方公司" required />
+            </label>
+            <label>项目所在地
+              <input type="text" id="projectLocationInput" placeholder="所在城市·区域" />
+            </label>
+            <label>开始时间
+              <input type="date" id="projectStartInput" required />
+            </label>
+            <label>截止时间
+              <input type="date" id="projectDeadlineInput" required />
+            </label>
+            <label>当前完成度
+              <input type="number" id="projectProgressInput" min="0" max="100" step="1" value="50" />
+            </label>
+            <label>协作团队（逗号分隔）
+              <input type="text" id="projectTeamInput" placeholder="规划一所, 建筑二组" />
+            </label>
+            <label>标签（逗号分隔）
+              <input type="text" id="projectTagsInput" placeholder="TOD, 快速推进" />
+            </label>
+            <label>项目概述
+              <textarea id="projectSummaryInput" rows="2" placeholder="概述项目诉求与推进重点"></textarea>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="primary">保存项目</button>
+          </div>
+        </form>
       </section>
 
       <section class="project-detail">
@@ -75,6 +139,24 @@
           </div>
           <div class="summary-body" id="projectSummaryBody"></div>
           <div class="tag-row" id="projectTags"></div>
+          <div class="summary-actions">
+            <label>调整项目类别
+              <select id="projectTypeControl">
+                <option value="规划设计">规划设计</option>
+                <option value="建筑方案">建筑方案</option>
+                <option value="施工图">施工图</option>
+              </select>
+            </label>
+            <label>项目状态
+              <select id="projectStatusControl">
+                <option value="执行中">执行中</option>
+                <option value="预警">预警</option>
+                <option value="完成">完成</option>
+                <option value="筹备">筹备</option>
+              </select>
+            </label>
+            <button class="ghost-button danger" id="deleteProjectButton">删除项目</button>
+          </div>
         </div>
         <div class="detail-column glass-panel timeline-column">
           <div class="detail-header">

@@ -355,6 +355,8 @@ const exportButton = document.getElementById('exportButton');
 const projectStatus = document.getElementById('projectStatus');
 const projectSummaryBody = document.getElementById('projectSummaryBody');
 const projectTags = document.getElementById('projectTags');
+const boardOverviewContainer = document.getElementById('boardOverview');
+const pushAlertContainer = document.getElementById('pushAlertList');
 const timelineContainer = document.getElementById('timeline');
 const eventBody = document.getElementById('eventBody');
 const eventType = document.getElementById('eventType');
@@ -368,6 +370,26 @@ const toggleLogFormBtn = document.getElementById('toggleLogForm');
 const cancelLogBtn = document.getElementById('cancelLog');
 const logTable = document.getElementById('logTable');
 const logTimeInput = document.getElementById('logTime');
+const addProjectButton = document.getElementById('addProjectButton');
+const projectFormPanel = document.getElementById('projectFormPanel');
+const projectForm = document.getElementById('projectForm');
+const projectFormTitle = document.getElementById('projectFormTitle');
+const closeProjectFormBtn = document.getElementById('closeProjectForm');
+const projectNameInput = document.getElementById('projectNameInput');
+const projectTypeInput = document.getElementById('projectTypeInput');
+const projectStatusInput = document.getElementById('projectStatusInput');
+const projectManagerInput = document.getElementById('projectManagerInput');
+const projectClientInput = document.getElementById('projectClientInput');
+const projectLocationInput = document.getElementById('projectLocationInput');
+const projectStartInput = document.getElementById('projectStartInput');
+const projectDeadlineInput = document.getElementById('projectDeadlineInput');
+const projectProgressInput = document.getElementById('projectProgressInput');
+const projectTeamInput = document.getElementById('projectTeamInput');
+const projectTagsInput = document.getElementById('projectTagsInput');
+const projectSummaryInput = document.getElementById('projectSummaryInput');
+const projectTypeControl = document.getElementById('projectTypeControl');
+const projectStatusControl = document.getElementById('projectStatusControl');
+const deleteProjectButton = document.getElementById('deleteProjectButton');
 
 function init() {
   renderOverview();
@@ -393,9 +415,12 @@ function renderOverview() {
   const total = projects.length;
   const executing = projects.filter((p) => p.status === '执行中').length;
   const warning = projects.filter((p) => p.status === '预警').length;
-  const averageProgress = Math.round(
-    (projects.reduce((sum, p) => sum + p.progress, 0) / total) * 100
-  );
+  const averageProgress =
+    total === 0
+      ? 0
+      : Math.round(
+          (projects.reduce((sum, p) => sum + p.progress, 0) / total) * 100
+        );
   const typeStats = projects.reduce((acc, project) => {
     acc[project.type] = (acc[project.type] || 0) + 1;
     return acc;
@@ -490,6 +515,210 @@ function renderProjects() {
   if (!filtered.length) {
     projectGrid.innerHTML = '<p class="empty">当前类别暂无项目。</p>';
   }
+  renderBoardOverview();
+}
+
+function renderBoardOverview() {
+  if (!boardOverviewContainer || !pushAlertContainer) return;
+  if (currentTypeFilter !== 'all') {
+    boardOverviewContainer.classList.add('hidden');
+    pushAlertContainer.classList.add('hidden');
+    return;
+  }
+
+  boardOverviewContainer.classList.remove('hidden');
+  pushAlertContainer.classList.remove('hidden');
+
+  if (!projects.length) {
+    boardOverviewContainer.innerHTML =
+      '<p class="empty">暂无项目，请通过“新增项目”创建。</p>';
+    pushAlertContainer.innerHTML = '<p class="empty">暂无需要重点推进的项目。</p>';
+    return;
+  }
+
+  const total = projects.length;
+  const averageProgress = Math.round(
+    (projects.reduce((sum, project) => sum + project.progress, 0) / total) * 100
+  );
+  const typeStats = projects.reduce((acc, project) => {
+    acc[project.type] = (acc[project.type] || 0) + 1;
+    return acc;
+  }, {});
+  const statusStats = projects.reduce((acc, project) => {
+    acc[project.status] = (acc[project.status] || 0) + 1;
+    return acc;
+  }, {});
+  const handoverCandidates = projects.filter(
+    (project) => project.type !== '施工图' && project.progress >= 0.6
+  ).length;
+
+  const pushEntries = buildPushEntries();
+  const urgentCount = pushEntries.filter((entry) => entry.level === 'urgent').length;
+  const attentionCount = pushEntries.filter(
+    (entry) => entry.level === 'soon' || entry.level === 'handover'
+  ).length;
+
+  boardOverviewContainer.innerHTML = `
+    <div class="portfolio-card">
+      <h4>项目总数</h4>
+      <strong>${total}</strong>
+      <span>平均完成度 ${averageProgress}%</span>
+    </div>
+    <div class="portfolio-card">
+      <h4>状态监测</h4>
+      <strong>${statusStats['执行中'] || 0} 执行中</strong>
+      <span>预警 ${statusStats['预警'] || 0} · 完成 ${statusStats['完成'] || 0}</span>
+    </div>
+    <div class="portfolio-card">
+      <h4>阶段协同</h4>
+      <strong>${typeStats['规划设计'] || 0} / ${typeStats['建筑方案'] || 0} / ${
+    typeStats['施工图'] || 0
+  }</strong>
+      <span>${
+        handoverCandidates ? `${handoverCandidates} 个项目接近移交` : '关注跨部门衔接'
+      }</span>
+    </div>
+    <div class="portfolio-card">
+      <h4>推进提醒</h4>
+      <strong>${pushEntries.length}</strong>
+      <span>紧迫 ${urgentCount} · 关注 ${attentionCount}</span>
+    </div>
+  `;
+
+  if (!pushEntries.length) {
+    pushAlertContainer.innerHTML = '<p class="empty">暂无需要重点推进的项目。</p>';
+    return;
+  }
+
+  pushAlertContainer.innerHTML = '';
+  pushEntries.forEach((entry) => {
+    const item = document.createElement('div');
+    item.className = 'push-card';
+    item.dataset.level = entry.level;
+    const listItems = [];
+    entry.tasks
+      .sort((a, b) => a.diffDays - b.diffDays)
+      .forEach((task) => {
+        const dueLabel =
+          task.diffDays <= 0
+            ? `已逾期（${formatDate(task.due)}）`
+            : `剩余${task.diffDays}天（${formatDate(task.due)}）`;
+        listItems.push(`<li>${task.title} · ${dueLabel}</li>`);
+      });
+    entry.reasons.forEach((reason) => {
+      listItems.push(`<li>${reason}</li>`);
+    });
+    const detailList = listItems.length ? `<ul>${listItems.join('')}</ul>` : '';
+    item.innerHTML = `
+      <header>
+        <h4>${entry.project.name}</h4>
+        <span>${entry.levelLabel}${entry.dueLabel ? ` · ${entry.dueLabel}` : ''}</span>
+      </header>
+      <div class="project-meta">
+        <span>${entry.project.type}</span>
+        <span>${Math.round(entry.project.progress * 100)}%</span>
+      </div>
+      ${detailList}
+    `;
+    item.addEventListener('click', () => selectProject(entry.project.id));
+    pushAlertContainer.appendChild(item);
+  });
+}
+
+function buildPushEntries() {
+  const now = new Date();
+  const entriesMap = new Map();
+
+  const ensureEntry = (project) => {
+    if (!entriesMap.has(project.id)) {
+      entriesMap.set(project.id, {
+        project,
+        tasks: [],
+        reasons: [],
+        level: 'info',
+        dueLabel: '',
+        levelLabel: '关注'
+      });
+    }
+    return entriesMap.get(project.id);
+  };
+
+  projects.forEach((project) => {
+    (project.tasks || []).forEach((task) => {
+      if (task.status === '完成') return;
+      const due = new Date(task.due);
+      if (Number.isNaN(due.getTime())) return;
+      const diffDays = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
+      if (diffDays <= 7) {
+        const entry = ensureEntry(project);
+        entry.tasks.push({ title: task.title, due: task.due, diffDays });
+        if (diffDays <= 0 || diffDays <= 3) {
+          entry.level = 'urgent';
+        } else if (entry.level !== 'urgent') {
+          entry.level = 'soon';
+        }
+      }
+    });
+
+    if (project.type !== '施工图' && project.progress >= 0.6) {
+      const entry = ensureEntry(project);
+      entry.reasons.push(`接近移交至${getNextProjectType(project.type)}`);
+      if (entry.level === 'info') {
+        entry.level = 'handover';
+      }
+    }
+
+    if (project.status === '预警') {
+      const entry = ensureEntry(project);
+      if (!entry.reasons.includes('处于预警状态')) {
+        entry.reasons.push('处于预警状态');
+      }
+      if (entry.level !== 'urgent') {
+        entry.level = entry.level === 'handover' ? 'handover' : 'soon';
+      }
+    }
+  });
+
+  const levelOrder = { urgent: 0, soon: 1, handover: 2, info: 3 };
+
+  return Array.from(entriesMap.values())
+    .map((entry) => {
+      if (entry.tasks.length) {
+        const soonest = entry.tasks.reduce((prev, curr) =>
+          curr.diffDays < prev.diffDays ? curr : prev
+        );
+        entry.dueLabel =
+          soonest.diffDays <= 0 ? '已到期' : `剩余${soonest.diffDays}天`;
+      } else if (entry.level === 'handover') {
+        entry.dueLabel = '建议提前部署';
+      } else if (entry.level === 'soon') {
+        entry.dueLabel = '请关注进度';
+      } else {
+        entry.dueLabel = '';
+      }
+
+      entry.levelLabel =
+        entry.level === 'urgent'
+          ? '紧迫推进'
+          : entry.level === 'soon'
+          ? '近期跟进'
+          : entry.level === 'handover'
+          ? '移交筹备'
+          : '关注';
+
+      return entry;
+    })
+    .sort((a, b) => {
+      const levelDiff = (levelOrder[a.level] || 3) - (levelOrder[b.level] || 3);
+      if (levelDiff !== 0) return levelDiff;
+      const aDiff = a.tasks.length
+        ? Math.min(...a.tasks.map((task) => task.diffDays))
+        : 999;
+      const bDiff = b.tasks.length
+        ? Math.min(...b.tasks.map((task) => task.diffDays))
+        : 999;
+      return aDiff - bDiff;
+    });
 }
 
 function selectProject(projectId) {
@@ -513,21 +742,38 @@ function selectProject(projectId) {
 function renderProjectSummary(project) {
   projectStatus.textContent = project.status;
   projectStatus.dataset.status = project.status;
+  const location = project.location || '待定';
+  const teamInfo = project.team && project.team.length ? project.team.join(' / ') : '—';
+  const summaryText = project.summary || '待补充';
   projectSummaryBody.innerHTML = `
-    <div class="summary-item"><span>项目位置</span><strong>${project.location}</strong></div>
+    <div class="summary-item"><span>所属阶段</span><strong>${project.type}</strong></div>
+    <div class="summary-item"><span>项目位置</span><strong>${location}</strong></div>
     <div class="summary-item"><span>进度</span><strong>${Math.round(project.progress * 100)}%</strong></div>
     <div class="summary-item"><span>项目负责人</span><strong>${project.manager}</strong></div>
     <div class="summary-item"><span>甲方单位</span><strong>${project.client}</strong></div>
-    <div class="summary-item"><span>团队协作</span><strong>${project.team.join(' / ')}</strong></div>
-    <div class="summary-item"><span>概述</span><strong>${project.summary}</strong></div>
+    <div class="summary-item"><span>团队协作</span><strong>${teamInfo}</strong></div>
+    <div class="summary-item"><span>概述</span><strong>${summaryText}</strong></div>
   `;
   projectTags.innerHTML = '';
-  project.tags.forEach((tag) => {
+  if (project.tags && project.tags.length) {
+    project.tags.forEach((tag) => {
+      const span = document.createElement('span');
+      span.className = 'chip';
+      span.textContent = tag;
+      projectTags.appendChild(span);
+    });
+  } else {
     const span = document.createElement('span');
-    span.className = 'chip';
-    span.textContent = tag;
+    span.className = 'chip muted';
+    span.textContent = '暂无标签';
     projectTags.appendChild(span);
-  });
+  }
+  if (projectTypeControl) {
+    projectTypeControl.value = project.type;
+  }
+  if (projectStatusControl) {
+    projectStatusControl.value = project.status;
+  }
 }
 
 function renderTimeline(project) {
@@ -611,10 +857,11 @@ function renderTasks(project) {
         task.status = task.status === '完成' ? '进行中' : '完成';
         renderTasks(project);
         renderReminders();
+        renderBoardOverview();
       });
       taskList.appendChild(card);
     });
-  taskCount.textContent = `${project.tasks.length} 项`; 
+  taskCount.textContent = `${project.tasks.length} 项`;
 }
 
 function renderReminders() {
@@ -784,7 +1031,223 @@ function setupListeners() {
     renderLogTable();
   });
 
+  if (addProjectButton) {
+    addProjectButton.addEventListener('click', () => {
+      openProjectForm();
+    });
+  }
+
+  if (closeProjectFormBtn) {
+    closeProjectFormBtn.addEventListener('click', () => {
+      toggleProjectForm(false);
+    });
+  }
+
+  if (projectForm) {
+    projectForm.addEventListener('submit', handleProjectFormSubmit);
+  }
+
+  if (projectTypeControl) {
+    projectTypeControl.addEventListener('change', () => {
+      if (!currentProjectId) return;
+      const project = projects.find((p) => p.id === currentProjectId);
+      if (!project) return;
+      project.type = projectTypeControl.value;
+      currentTypeFilter = 'all';
+      typeFilterSelect.value = 'all';
+      renderOverview();
+      renderMonthlyProgress();
+      renderProjects();
+      renderReminders();
+      selectProject(project.id);
+    });
+  }
+
+  if (projectStatusControl) {
+    projectStatusControl.addEventListener('change', () => {
+      if (!currentProjectId) return;
+      const project = projects.find((p) => p.id === currentProjectId);
+      if (!project) return;
+      project.status = projectStatusControl.value;
+      renderOverview();
+      renderProjects();
+      renderReminders();
+      selectProject(project.id);
+    });
+  }
+
+  if (deleteProjectButton) {
+    deleteProjectButton.addEventListener('click', () => {
+      if (!currentProjectId) return;
+      const project = projects.find((p) => p.id === currentProjectId);
+      if (!project) return;
+      if (!confirm(`确定删除项目「${project.name}」吗？`)) {
+        return;
+      }
+      const index = projects.findIndex((p) => p.id === project.id);
+      if (index === -1) return;
+      projects.splice(index, 1);
+      for (let i = workLogs.length - 1; i >= 0; i -= 1) {
+        if (workLogs[i].projectId === project.id) {
+          workLogs.splice(i, 1);
+        }
+      }
+      currentTypeFilter = 'all';
+      typeFilterSelect.value = 'all';
+      currentProjectId = null;
+      renderOverview();
+      renderMonthlyProgress();
+      renderProjects();
+      populateLogProjectOptions();
+      renderReminders();
+      renderLogTable();
+      if (projects.length) {
+        selectProject(projects[0].id);
+      } else {
+        exportButton.disabled = true;
+        projectSummaryBody.innerHTML = '<p class="empty">请选择项目。</p>';
+        projectTags.innerHTML = '';
+        projectStatus.textContent = '';
+        delete projectStatus.dataset.status;
+        timelineContainer.innerHTML = '';
+        resetEventDetail();
+        taskList.innerHTML = '';
+        taskCount.textContent = '0 项';
+      }
+    });
+  }
+
   exportButton.addEventListener('click', exportCurrentProjectLogs);
+}
+
+function openProjectForm() {
+  if (!projectFormPanel) return;
+  if (projectForm) {
+    projectForm.reset();
+  }
+  if (projectFormTitle) {
+    projectFormTitle.textContent = '新增项目';
+  }
+  const today = new Date();
+  if (projectStartInput) {
+    projectStartInput.value = formatDateForInput(today);
+  }
+  if (projectDeadlineInput) {
+    const deadline = new Date(today.getTime());
+    deadline.setDate(deadline.getDate() + 30);
+    projectDeadlineInput.value = formatDateForInput(deadline);
+  }
+  toggleProjectForm(true);
+  setTimeout(() => {
+    projectFormPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 0);
+}
+
+function toggleProjectForm(show) {
+  if (!projectFormPanel) return;
+  if (show) {
+    projectFormPanel.classList.remove('hidden');
+  } else {
+    projectFormPanel.classList.add('hidden');
+    if (projectForm) {
+      projectForm.reset();
+    }
+  }
+}
+
+function handleProjectFormSubmit(event) {
+  event.preventDefault();
+  if (!projectForm) return;
+  const name = projectNameInput.value.trim();
+  if (!name) {
+    alert('请填写项目名称');
+    return;
+  }
+  const type = projectTypeInput.value;
+  const status = projectStatusInput.value;
+  const manager = projectManagerInput.value.trim();
+  const client = projectClientInput.value.trim();
+  const location = projectLocationInput.value.trim() || '待定';
+  const start = projectStartInput.value;
+  const deadline = projectDeadlineInput.value;
+  const progressRaw = Number(projectProgressInput.value);
+  const progressPercent = Number.isNaN(progressRaw)
+    ? 0
+    : Math.min(100, Math.max(0, progressRaw));
+  const newProject = {
+    id: generateProjectId(type),
+    name,
+    type,
+    status,
+    progress: progressPercent / 100,
+    client,
+    manager,
+    team: toArrayFromInput(projectTeamInput.value),
+    location,
+    start,
+    deadline,
+    summary: projectSummaryInput.value.trim(),
+    tags: toArrayFromInput(projectTagsInput.value),
+    health: status === '预警' ? '受控' : '良好',
+    monthlyProgress: buildInitialMonthlySnapshot(start, progressPercent),
+    timeline: [],
+    tasks: []
+  };
+  projects.push(newProject);
+  toggleProjectForm(false);
+  currentTypeFilter = 'all';
+  typeFilterSelect.value = 'all';
+  renderOverview();
+  renderMonthlyProgress();
+  renderProjects();
+  populateLogProjectOptions();
+  renderReminders();
+  selectProject(newProject.id);
+}
+
+function toArrayFromInput(value) {
+  if (!value) return [];
+  return value
+    .split(/[,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildInitialMonthlySnapshot(startDate, progressPercent) {
+  const date = new Date(startDate);
+  if (Number.isNaN(date.getTime())) return [];
+  const monthLabel = `${date.getFullYear()}年${String(date.getMonth() + 1).padStart(2, '0')}月`;
+  return [
+    {
+      month: monthLabel,
+      completion: progressPercent,
+      deliveries: 0,
+      risks: 0
+    }
+  ];
+}
+
+function formatDateForInput(date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
+function generateProjectId(type) {
+  const prefix = type === '规划设计' ? 'plan' : type === '建筑方案' ? 'scheme' : 'cd';
+  const base = `${prefix}-${Date.now()}`;
+  let candidate = base;
+  let counter = 1;
+  while (projects.some((project) => project.id === candidate)) {
+    candidate = `${base}-${counter}`;
+    counter += 1;
+  }
+  return candidate;
+}
+
+function getNextProjectType(type) {
+  if (type === '规划设计') return '建筑方案';
+  if (type === '建筑方案') return '施工图';
+  return '交付运营';
 }
 
 async function buildLogFromForm() {
