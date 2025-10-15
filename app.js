@@ -1,4 +1,5 @@
 const defaultProjects = [
+const projects = [
   {
     id: 'plan-01',
     name: '城市更新总体策划',
@@ -298,6 +299,8 @@ const defaultProjects = [
 const defaultWorkLogs = [
   {
     id: 'log-plan-traffic',
+const workLogs = [
+  {
     projectId: 'plan-01',
     time: '2024-04-29T14:30',
     event: '交通节点协调会',
@@ -374,6 +377,13 @@ const calendarPrevBtn = document.getElementById('calendarPrev');
 const calendarNextBtn = document.getElementById('calendarNext');
 const calendarPanel = document.getElementById('calendarPanel');
 const calendarPopover = document.getElementById('calendarPopover');
+let currentTypeFilter = 'all';
+let currentProjectId = null;
+let currentTimelineFilter = 'all';
+
+const overviewGrid = document.getElementById('overviewGrid');
+const monthlyProgressContainer = document.getElementById('monthlyProgress');
+const currentMonthLabel = document.getElementById('currentMonth');
 const reminderList = document.getElementById('reminderList');
 const urgentCount = document.getElementById('urgentCount');
 const projectGrid = document.getElementById('projectGrid');
@@ -427,6 +437,7 @@ function init() {
   renderCalendar();
   setupListeners();
   setupAutoSave();
+  setupListeners();
   currentMonthLabel.textContent = new Date().toLocaleDateString('zh-CN', {
     month: 'long',
     year: 'numeric'
@@ -464,6 +475,9 @@ function renderOverview() {
         typeStats['施工图'] || 0
       }`,
       sub: '规划-方案-施工全链路联动'
+      label: '规划 / 方案 / 施工图',
+      value: `${typeStats['规划设计'] || 0} / ${typeStats['建筑方案'] || 0} / ${typeStats['施工图'] || 0}`,
+      sub: '多类型协同推进'
     }
   ];
   cards.forEach((card) => {
@@ -1326,6 +1340,7 @@ function renderTimeline(project) {
   const events = buildTimelineEntries(project);
   timelineRegistry.set(project.id, events);
   const filtered = events.filter((event) => {
+  const events = project.timeline.filter((event) => {
     if (currentTimelineFilter === 'milestone') return event.type === 'milestone';
     if (currentTimelineFilter === 'risk') return event.type === 'risk';
     return true;
@@ -1364,6 +1379,28 @@ function renderTimeline(project) {
   });
 
   if (!filtered.length) {
+  events
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .forEach((event) => {
+      const item = document.createElement('div');
+      item.className = 'timeline-item';
+      item.dataset.type = event.type;
+      item.innerHTML = `
+        <div class="timeline-meta">
+          <span>${formatDate(event.date)}</span>
+          <span>${event.status}</span>
+        </div>
+        <h4>${event.title}</h4>
+        <p>${event.description}</p>
+      `;
+      item.addEventListener('click', () => {
+        document.querySelectorAll('.timeline-item').forEach((el) => el.classList.remove('active'));
+        item.classList.add('active');
+        renderEventDetail(event);
+      });
+      timelineContainer.appendChild(item);
+    });
+  if (!events.length) {
     timelineContainer.innerHTML = '<p class="empty">当前筛选下暂无事件。</p>';
   }
 }
@@ -1420,6 +1457,10 @@ function renderEventDetail(event) {
     <div><strong>责任人：</strong>${event.owner || '—'}</div>
     <div><strong>当前状态：</strong>${event.status || '—'}</div>
     <div><strong>工作情况：</strong>${event.notes || event.description || '—'}</div>
+    <div><strong>甲方要求：</strong>${event.clientRequest}</div>
+    <div><strong>责任人：</strong>${event.owner}</div>
+    <div><strong>当前状态：</strong>${event.status}</div>
+    <div><strong>工作情况：</strong>${event.notes}</div>
   `;
 }
 
@@ -1463,6 +1504,8 @@ function renderTasks(project) {
         renderBoardOverview();
         renderCalendar();
         requestPersist();
+        renderReminders();
+        renderBoardOverview();
       });
       taskList.appendChild(card);
     });
@@ -1563,6 +1606,7 @@ function renderLogTable() {
         img.src = file.url;
         img.alt = file.name;
         img.title = file.path || file.name;
+        img.title = file.name;
         attachmentWrap.appendChild(img);
       });
       entry.appendChild(attachmentWrap);
@@ -1574,6 +1618,24 @@ function renderLogTable() {
 function setupListeners() {
   typeFilterSelect.addEventListener('change', (event) => {
     applyTypeFilter(event.target.value);
+    currentTypeFilter = event.target.value;
+    renderProjects();
+    const filtered = getFilteredProjects();
+    if (!filtered.some((project) => project.id === currentProjectId)) {
+      if (filtered.length) {
+        selectProject(filtered[0].id);
+      } else {
+        currentProjectId = null;
+        exportButton.disabled = true;
+        projectSummaryBody.innerHTML = '<p class="empty">请选择项目。</p>';
+        projectTags.innerHTML = '';
+        timelineContainer.innerHTML = '';
+        resetEventDetail();
+        taskList.innerHTML = '';
+        taskCount.textContent = '0 项';
+        renderLogTable();
+      }
+    }
   });
 
   toggleButtons.forEach((button) => {
@@ -1614,6 +1676,8 @@ function setupListeners() {
     const defaultProject = currentProjectId || newLog.projectId;
     if (defaultProject) {
       logProjectSelect.value = defaultProject;
+    if (currentProjectId) {
+      logProjectSelect.value = currentProjectId;
     }
     const now = new Date();
     logTimeInput.value = `${now.toISOString().slice(0, 16)}`;
@@ -1933,6 +1997,7 @@ function readFilesAsDataUrl(fileList) {
           url: reader.result,
           path: file.webkitRelativePath || file.name
         });
+      reader.onload = () => resolve({ name: file.name, url: reader.result });
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
@@ -1958,6 +2023,7 @@ function exportCurrentProjectLogs() {
     log.submission || '',
     log.channel || '',
     (log.attachments || []).map((file) => file.path || file.name).join('、')
+    (log.attachments || []).map((file) => file.name).join('、')
   ]);
   const csvContent = [header, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
   const blob = new Blob(['\uFEFF' + csvContent], {
