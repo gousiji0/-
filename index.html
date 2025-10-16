@@ -79,10 +79,13 @@
         <div class="section-header">
           <h3>项目概览</h3>
           <div class="board-actions">
+            <button id="loadStateButton" class="ghost-button">加载数据</button>
+            <button id="saveStateButton" class="ghost-button">保存数据</button>
             <button id="addProjectButton" class="primary">新增项目</button>
             <button id="exportButton" class="ghost-button" disabled>导出当前项目记录</button>
           </div>
         </div>
+        <input type="file" id="stateFileInput" accept="application/json" hidden />
         <div class="portfolio-summary hidden" id="boardOverview"></div>
         <div class="push-alerts hidden" id="pushAlertList"></div>
         <div class="project-grid" id="projectGrid"></div>

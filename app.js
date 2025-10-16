@@ -349,11 +349,6 @@ const STORAGE_KEYS = {
   logs: 'atlas-design-worklogs'
 };
 
-const SERVER_ENDPOINT_CANDIDATES = ['./api/state.php', './api/state'];
-
-let activeServerEndpoint = null;
-
-let persistenceMode = 'localStorage';
 let projects = [];
 let workLogs = [];
 
@@ -379,6 +374,9 @@ const reminderList = document.getElementById('reminderList');
 const urgentCount = document.getElementById('urgentCount');
 const projectGrid = document.getElementById('projectGrid');
 const exportButton = document.getElementById('exportButton');
+const saveStateButton = document.getElementById('saveStateButton');
+const loadStateButton = document.getElementById('loadStateButton');
+const stateFileInput = document.getElementById('stateFileInput');
 const projectStatus = document.getElementById('projectStatus');
 const projectSummaryBody = document.getElementById('projectSummaryBody');
 const projectTags = document.getElementById('projectTags');
@@ -591,6 +589,71 @@ function syncAllLogTasks() {
   });
 }
 
+function clearProjectDetails() {
+  if (projectStatus) {
+    projectStatus.textContent = '—';
+    projectStatus.dataset.status = 'empty';
+  }
+  if (projectSummaryBody) {
+    projectSummaryBody.innerHTML = '<p class="empty">暂无项目，请先创建或加载数据。</p>';
+  }
+  if (projectTags) {
+    projectTags.innerHTML = '<span class="chip muted">暂无标签</span>';
+  }
+  if (timelineContainer) {
+    timelineContainer.innerHTML = '<p class="empty">暂无时间轴信息。</p>';
+  }
+  if (taskList) {
+    taskList.innerHTML = '<p class="empty">暂无任务。</p>';
+  }
+  if (taskCount) {
+    taskCount.textContent = '0 项';
+  }
+  if (logTable) {
+    logTable.innerHTML = '<p class="empty">暂无记录，点击“新增记录”补充工作内容。</p>';
+  }
+  resetEventDetail();
+  if (editSummaryButton) {
+    editSummaryButton.disabled = true;
+  }
+  if (summaryEditPanel) {
+    summaryEditPanel.classList.add('hidden');
+  }
+  if (summaryEditInput) {
+    summaryEditInput.value = '';
+  }
+  if (projectTypeControl) {
+    projectTypeControl.value = '规划设计';
+  }
+  if (projectStatusControl) {
+    projectStatusControl.value = '执行中';
+  }
+  if (exportButton) {
+    exportButton.disabled = true;
+  }
+}
+
+function refreshBoardState(preferredProjectId = null) {
+  syncAllLogTasks();
+  renderOverview();
+  renderMonthlyProgress();
+  renderProjects();
+  populateLogProjectOptions();
+  renderLogTable();
+  renderReminders();
+
+  const desiredId = preferredProjectId || currentProjectId;
+  const hasDesired = desiredId && projects.some((project) => project.id === desiredId);
+  const fallbackProject = hasDesired ? desiredId : projects[0] ? projects[0].id : null;
+
+  if (fallbackProject) {
+    selectProject(fallbackProject);
+  } else {
+    currentProjectId = null;
+    clearProjectDetails();
+  }
+}
+
 function updateLogsForTaskStatus(projectId, task) {
   if (!task || task.source !== 'log' || !task.sourceKey) return;
   const relatedLogs = workLogs
@@ -607,13 +670,7 @@ function updateLogsForTaskStatus(projectId, task) {
 }
 
 function init() {
-  syncAllLogTasks();
-  renderOverview();
-  renderMonthlyProgress();
-  renderProjects();
-  populateLogProjectOptions();
-  renderLogTable();
-  renderReminders();
+  refreshBoardState();
   renderCalendar();
   setupListeners();
   setupAutoSave();
@@ -623,20 +680,6 @@ function init() {
   });
   const now = new Date();
   logTimeInput.value = `${now.toISOString().slice(0, 16)}`;
-  const firstProject = getFilteredProjects()[0];
-  if (firstProject) {
-    selectProject(firstProject.id);
-  } else {
-    if (editSummaryButton) {
-      editSummaryButton.disabled = true;
-    }
-    if (summaryEditPanel) {
-      summaryEditPanel.classList.add('hidden');
-    }
-    if (summaryEditInput) {
-      summaryEditInput.value = '';
-    }
-  }
   requestPersist(true);
 }
 
@@ -1904,6 +1947,17 @@ function setupListeners() {
     applyTypeFilter(event.target.value);
   });
 
+  if (saveStateButton) {
+    saveStateButton.addEventListener('click', () => {
+      exportBoardState();
+    });
+  }
+
+  if (loadStateButton && stateFileInput) {
+    loadStateButton.addEventListener('click', () => stateFileInput.click());
+    stateFileInput.addEventListener('change', handleStateFileSelection);
+  }
+
   if (editSummaryButton) {
     editSummaryButton.addEventListener('click', () => {
       if (!currentProjectId || !summaryEditPanel) return;
@@ -2082,34 +2136,7 @@ function setupListeners() {
       currentTypeFilter = 'all';
       typeFilterSelect.value = 'all';
       currentProjectId = null;
-      renderOverview();
-      renderMonthlyProgress();
-      renderProjects();
-      populateLogProjectOptions();
-      renderReminders();
-      renderLogTable();
-      if (projects.length) {
-        selectProject(projects[0].id);
-      } else {
-        exportButton.disabled = true;
-        projectSummaryBody.innerHTML = '<p class="empty">请选择项目。</p>';
-        projectTags.innerHTML = '';
-        projectStatus.textContent = '';
-        delete projectStatus.dataset.status;
-        timelineContainer.innerHTML = '';
-        resetEventDetail();
-        taskList.innerHTML = '';
-        taskCount.textContent = '0 项';
-        if (editSummaryButton) {
-          editSummaryButton.disabled = true;
-        }
-        if (summaryEditPanel) {
-          summaryEditPanel.classList.add('hidden');
-        }
-        if (summaryEditInput) {
-          summaryEditInput.value = '';
-        }
-      }
+      refreshBoardState();
       renderCalendar();
       requestPersist();
     });
@@ -2227,12 +2254,7 @@ function handleProjectFormSubmit(event) {
   toggleProjectForm(false);
   currentTypeFilter = 'all';
   typeFilterSelect.value = 'all';
-  renderOverview();
-  renderMonthlyProgress();
-  renderProjects();
-  populateLogProjectOptions();
-  renderReminders();
-  selectProject(newProject.id);
+  refreshBoardState(newProject.id);
   renderCalendar();
   requestPersist();
 }
@@ -2400,21 +2422,6 @@ async function collectAttachments(fileList) {
   const files = Array.from(fileList || []);
   if (!files.length) return [];
 
-  if (window.electronAPI && window.electronAPI.storeAttachments) {
-    try {
-      const payload = files.map((file) => ({
-        name: file.name,
-        path: file.path || file.webkitRelativePath || file.name
-      }));
-      const stored = await window.electronAPI.storeAttachments(payload);
-      if (Array.isArray(stored)) {
-        return stored.map((item) => normalizeAttachmentEntry(item)).filter(Boolean);
-      }
-    } catch (error) {
-      console.warn('附件保存失败，将使用临时数据。', error);
-    }
-  }
-
   const readers = files.map((file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -2488,6 +2495,70 @@ function exportCurrentProjectLogs() {
   link.download = `${project.name}-工作记录.xlsx`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+}
+
+function exportBoardState() {
+  const timestamp = new Date();
+  const fileStamp = `${timestamp.getFullYear()}${String(timestamp.getMonth() + 1).padStart(2, '0')}${String(
+    timestamp.getDate()
+  ).padStart(2, '0')}-${String(timestamp.getHours()).padStart(2, '0')}${String(timestamp.getMinutes()).padStart(2, '0')}`;
+  const payload = {
+    version: 1,
+    exportedAt: timestamp.toISOString(),
+    currentProjectId,
+    projects,
+    logs: workLogs
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: 'application/json;charset=utf-8'
+  });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `atlas-board-${fileStamp}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+}
+
+function handleStateFileSelection(event) {
+  const input = event.target;
+  const files = input && input.files ? Array.from(input.files) : [];
+  const file = files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const payload = JSON.parse(reader.result);
+      applyImportedState(payload);
+    } catch (error) {
+      console.error('解析数据文件失败', error);
+      window.alert('加载数据失败，请确认选择了正确的 JSON 文件。');
+    } finally {
+      input.value = '';
+    }
+  };
+  reader.onerror = () => {
+    window.alert('读取数据文件时出错，请重试。');
+    input.value = '';
+  };
+  reader.readAsText(file, 'utf-8');
+}
+
+function applyImportedState(payload) {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('无效的数据内容');
+  }
+  const hasProjects = Array.isArray(payload.projects);
+  const hasLogs = Array.isArray(payload.logs);
+  if (!hasProjects && !hasLogs) {
+    throw new Error('缺少有效的数据字段');
+  }
+  const projectSource = hasProjects ? payload.projects : projects;
+  const logSource = hasLogs ? payload.logs : workLogs;
+  projects = rehydrateProjects(projectSource, defaultProjects);
+  workLogs = ensureLogIdentifiers(rehydrateLogs(logSource));
+  refreshBoardState(payload.currentProjectId || null);
+  renderCalendar();
+  requestPersist(true);
 }
 
 function escapeCsv(value) {
@@ -2651,7 +2722,7 @@ function deepClone(value) {
 
 function requestPersist(immediate = false) {
   if (typeof window === 'undefined') return;
-  if (immediate) {
+  const persist = () => {
     if (persistTimer) {
       clearTimeout(persistTimer);
       persistTimer = null;
@@ -2660,17 +2731,19 @@ function requestPersist(immediate = false) {
     if (result && typeof result.catch === 'function') {
       result.catch((error) => console.warn('保存数据失败', error));
     }
+  };
+
+  if (immediate) {
+    persist();
     return;
   }
+
   if (persistTimer) {
     clearTimeout(persistTimer);
   }
+
   persistTimer = window.setTimeout(() => {
-    const result = persistState();
-    if (result && typeof result.catch === 'function') {
-      result.catch((error) => console.warn('保存数据失败', error));
-    }
-    persistTimer = null;
+    persist();
   }, 260);
 }
 
@@ -2694,85 +2767,6 @@ function loadFromLocalStorage(key, fallback) {
   }
 }
 
-function hasFetchSupport() {
-  return typeof window !== 'undefined' && typeof window.fetch === 'function';
-}
-
-async function loadStateFromServer() {
-  if (!hasFetchSupport()) return null;
-  for (const endpoint of SERVER_ENDPOINT_CANDIDATES) {
-    try {
-      const response = await fetch(endpoint, {
-        cache: 'no-store'
-      });
-      if (!response.ok) {
-        if (response.status === 404) {
-          continue;
-        }
-        console.warn(`服务器端点 ${endpoint} 返回状态 ${response.status}`);
-        continue;
-      }
-      const payload = await response.json().catch(() => ({}));
-      activeServerEndpoint = endpoint;
-      return {
-        projects: Array.isArray(payload?.projects) ? payload.projects : [],
-        logs: Array.isArray(payload?.logs) ? payload.logs : []
-      };
-    } catch (error) {
-      console.warn(`读取端点 ${endpoint} 失败`, error);
-    }
-  }
-  return null;
-}
-
-function saveStateToServer(payload) {
-  if (!hasFetchSupport()) return Promise.resolve();
-  const candidates = activeServerEndpoint
-    ? [activeServerEndpoint, ...SERVER_ENDPOINT_CANDIDATES.filter((item) => item !== activeServerEndpoint)]
-    : [...SERVER_ENDPOINT_CANDIDATES];
-
-  if (!candidates.length) {
-    return Promise.reject(new Error('没有可用的服务器端点'));
-  }
-
-  let lastError = null;
-
-  const send = async (endpoint) => {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload),
-      cache: 'no-store'
-    });
-    if (!response.ok) {
-      throw new Error(`服务器返回异常状态码: ${response.status}`);
-    }
-    activeServerEndpoint = endpoint;
-    return response.json().catch(() => ({}));
-  };
-
-  let chain = send(candidates[0]).catch((error) => {
-    lastError = error;
-    return Promise.reject(error);
-  });
-
-  for (let i = 1; i < candidates.length; i += 1) {
-    const endpoint = candidates[i];
-    chain = chain.catch(() => send(endpoint).catch((error) => {
-      lastError = error;
-      return Promise.reject(error);
-    }));
-  }
-
-  return chain.catch((error) => {
-    lastError = error;
-    console.warn('所有服务器端点保存失败', error);
-    return Promise.reject(lastError || error);
-  });
-}
-
 function setupAutoSave() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
   window.addEventListener('beforeunload', () => requestPersist(true));
@@ -2784,18 +2778,6 @@ function setupAutoSave() {
 }
 
 function persistState() {
-  if (persistenceMode === 'electron' && window.electronAPI && window.electronAPI.saveState) {
-    return window.electronAPI.saveState({
-      projects,
-      logs: workLogs
-    });
-  }
-  if (persistenceMode === 'server') {
-    return saveStateToServer({
-      projects,
-      logs: workLogs
-    });
-  }
   if (typeof window === 'undefined' || !window.localStorage) return Promise.resolve();
   try {
     window.localStorage.setItem(STORAGE_KEYS.projects, JSON.stringify(projects));
@@ -2806,53 +2788,12 @@ function persistState() {
   return Promise.resolve();
 }
 
-async function bootstrap() {
-  let projectState = null;
-  let logState = null;
-
-  if (window.electronAPI && window.electronAPI.loadState) {
-    try {
-      const stored = await window.electronAPI.loadState();
-      if (stored && Array.isArray(stored.projects)) {
-        projectState = stored.projects;
-      }
-      if (stored && Array.isArray(stored.logs)) {
-        logState = stored.logs;
-      }
-      persistenceMode = 'electron';
-    } catch (error) {
-      console.warn('读取文件存储失败，回退到浏览器本地存储。', error);
-      persistenceMode = 'localStorage';
-    }
-  }
-
-  if (persistenceMode !== 'electron') {
-    const serverState = await loadStateFromServer();
-    if (serverState) {
-      projectState = serverState.projects;
-      logState = serverState.logs;
-      persistenceMode = 'server';
-    }
-  }
-
-  if (persistenceMode === 'localStorage') {
-    const fallbackProjects = loadFromLocalStorage(STORAGE_KEYS.projects, defaultProjects);
-    const fallbackLogs = loadFromLocalStorage(STORAGE_KEYS.logs, defaultWorkLogs);
-    projectState = Array.isArray(projectState) ? projectState : fallbackProjects;
-    logState = Array.isArray(logState) ? logState : fallbackLogs;
-  }
-
-  const projectSource = Array.isArray(projectState) && projectState.length ? projectState : defaultProjects;
-  const logSource = Array.isArray(logState) && logState.length ? logState : defaultWorkLogs;
-
-  projects = rehydrateProjects(projectSource, defaultProjects);
-  workLogs = ensureLogIdentifiers(rehydrateLogs(logSource));
-
+function bootstrap() {
+  const storedProjects = loadFromLocalStorage(STORAGE_KEYS.projects, defaultProjects);
+  const storedLogs = loadFromLocalStorage(STORAGE_KEYS.logs, defaultWorkLogs);
+  projects = rehydrateProjects(storedProjects, defaultProjects);
+  workLogs = ensureLogIdentifiers(rehydrateLogs(storedLogs));
   init();
-
-  if ((persistenceMode === 'electron' || persistenceMode === 'server') && (!projectState || !projectState.length || !logState || !logState.length)) {
-    requestPersist(true);
-  }
 }
 
 bootstrap();
