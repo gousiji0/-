@@ -349,6 +349,10 @@ const STORAGE_KEYS = {
   logs: 'atlas-design-worklogs'
 };
 
+const DATA_DIRECTORY_DB = 'atlas-board-data-dir';
+const DATA_DIRECTORY_STORE = 'handles';
+const DATA_DIRECTORY_KEY = 'data-directory';
+
 let projects = [];
 let workLogs = [];
 
@@ -356,6 +360,7 @@ let currentTypeFilter = 'all';
 let currentProjectId = null;
 let currentTimelineFilter = 'all';
 let calendarCursor = new Date();
+let dataDirectoryHandle = null;
 
 const timelineRegistry = new Map();
 let persistTimer = null;
@@ -1948,13 +1953,18 @@ function setupListeners() {
   });
 
   if (saveStateButton) {
-    saveStateButton.addEventListener('click', () => {
-      exportBoardState();
+    saveStateButton.addEventListener('click', async () => {
+      await exportBoardState();
     });
   }
 
   if (loadStateButton && stateFileInput) {
-    loadStateButton.addEventListener('click', () => stateFileInput.click());
+    loadStateButton.addEventListener('click', async () => {
+      const handled = await tryLoadStateFromDataDirectory();
+      if (!handled) {
+        stateFileInput.click();
+      }
+    });
     stateFileInput.addEventListener('change', handleStateFileSelection);
   }
 
@@ -2497,11 +2507,16 @@ function exportCurrentProjectLogs() {
   setTimeout(() => URL.revokeObjectURL(link.href), 2000);
 }
 
-function exportBoardState() {
+async function exportBoardState() {
   const timestamp = new Date();
   const fileStamp = `${timestamp.getFullYear()}${String(timestamp.getMonth() + 1).padStart(2, '0')}${String(
     timestamp.getDate()
-  ).padStart(2, '0')}-${String(timestamp.getHours()).padStart(2, '0')}${String(timestamp.getMinutes()).padStart(2, '0')}`;
+  ).padStart(2, '0')}${String(timestamp.getHours()).padStart(2, '0')}${String(timestamp.getMinutes()).padStart(
+    2,
+    '0'
+  )}`;
+  const hostName = sanitizeForFileName(window.location.hostname || 'local');
+  const fileName = `${fileStamp}-${hostName}.json`;
   const payload = {
     version: 1,
     exportedAt: timestamp.toISOString(),
@@ -2509,14 +2524,20 @@ function exportBoardState() {
     projects,
     logs: workLogs
   };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {
-    type: 'application/json;charset=utf-8'
-  });
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = `atlas-board-${fileStamp}.json`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+  const serialized = JSON.stringify(payload, null, 2);
+  const saveResult = await saveStateToPreferredDirectory(fileName, serialized);
+  if (saveResult.saved) {
+    window.alert(`已保存到 data/${fileName}`);
+    return;
+  }
+  if (saveResult.reason === 'write-error') {
+    window.alert('无法写入 data 目录，已改为下载 JSON 文件。');
+  } else if (saveResult.reason === 'no-handle') {
+    window.alert('尚未授权 data 目录，已改为下载 JSON 文件。');
+  } else if (!supportsFileSystemAccess()) {
+    window.alert('当前浏览器不支持直接写入 data 目录，已下载 JSON 文件。');
+  }
+  downloadStateFile(fileName, serialized);
 }
 
 function handleStateFileSelection(event) {
@@ -2788,7 +2809,251 @@ function persistState() {
   return Promise.resolve();
 }
 
-function bootstrap() {
+async function saveStateToPreferredDirectory(fileName, contents) {
+  if (!supportsFileSystemAccess()) {
+    return { saved: false, reason: 'unsupported' };
+  }
+
+  const directory = await prepareDataDirectoryHandle();
+  if (!directory) {
+    return { saved: false, reason: 'no-handle' };
+  }
+
+  try {
+    const fileHandle = await directory.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(contents);
+    await writable.close();
+    return { saved: true };
+  } catch (error) {
+    console.warn('写入 data 目录失败', error);
+    if (error && error.name === 'NotAllowedError') {
+      await clearStoredDirectoryHandle();
+    }
+    return { saved: false, reason: 'write-error', error };
+  }
+}
+
+async function tryLoadStateFromDataDirectory() {
+  if (!supportsFileSystemAccess() || !window.showOpenFilePicker) {
+    return false;
+  }
+
+  const directory = await prepareDataDirectoryHandle();
+  if (!directory) {
+    return false;
+  }
+
+  try {
+    const [fileHandle] = await window.showOpenFilePicker({
+      startIn: directory,
+      types: [
+        {
+          description: 'JSON 数据文件',
+          accept: { 'application/json': ['.json'] }
+        }
+      ]
+    });
+    if (!fileHandle) return false;
+    const file = await fileHandle.getFile();
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    applyImportedState(payload);
+    window.alert(`已加载 ${file.name}`);
+    return true;
+  } catch (error) {
+    if (error && error.name === 'AbortError') {
+      return false;
+    }
+    console.warn('从 data 目录读取失败', error);
+    window.alert('读取 data 目录中的文件失败，可改用“加载数据”按钮手动选择。');
+    return true;
+  }
+}
+
+function downloadStateFile(fileName, contents) {
+  const blob = new Blob([contents], {
+    type: 'application/json;charset=utf-8'
+  });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = fileName;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+}
+
+function supportsFileSystemAccess() {
+  return typeof window !== 'undefined' && 'showDirectoryPicker' in window;
+}
+
+async function prepareDataDirectoryHandle() {
+  if (!supportsFileSystemAccess()) return null;
+
+  if (dataDirectoryHandle) {
+    const allowed = await ensureDirectoryPermission(dataDirectoryHandle);
+    if (allowed) {
+      return dataDirectoryHandle;
+    }
+    dataDirectoryHandle = null;
+  }
+
+  const storedHandle = await getStoredDirectoryHandle();
+  if (storedHandle) {
+    const allowed = await ensureDirectoryPermission(storedHandle);
+    if (allowed && isDataDirectoryHandle(storedHandle)) {
+      dataDirectoryHandle = storedHandle;
+      return dataDirectoryHandle;
+    }
+    if (!allowed || !isDataDirectoryHandle(storedHandle)) {
+      await clearStoredDirectoryHandle();
+    }
+  }
+
+  const pickedHandle = await pickDataDirectory();
+  if (!pickedHandle) {
+    return null;
+  }
+  dataDirectoryHandle = pickedHandle;
+  await storeDirectoryHandle(pickedHandle);
+  return pickedHandle;
+}
+
+async function pickDataDirectory() {
+  try {
+    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    if (!isDataDirectoryHandle(handle)) {
+      window.alert('请选择与页面同目录下的 data 文件夹。');
+      return null;
+    }
+    const allowed = await ensureDirectoryPermission(handle);
+    if (!allowed) {
+      window.alert('未获得对 data 目录的写入权限。');
+      return null;
+    }
+    return handle;
+  } catch (error) {
+    if (error && error.name === 'AbortError') {
+      return null;
+    }
+    console.warn('选择 data 目录失败', error);
+    return null;
+  }
+}
+
+async function ensureDirectoryPermission(handle) {
+  if (!handle || !handle.queryPermission || !handle.requestPermission) return false;
+  const current = await handle.queryPermission({ mode: 'readwrite' });
+  if (current === 'granted') return true;
+  if (current === 'denied') return false;
+  const next = await handle.requestPermission({ mode: 'readwrite' });
+  return next === 'granted';
+}
+
+function isDataDirectoryHandle(handle) {
+  return Boolean(handle && handle.kind === 'directory' && handle.name === 'data');
+}
+
+async function getStoredDirectoryHandle() {
+  if (typeof window === 'undefined' || !window.indexedDB) return null;
+  try {
+    const db = await openHandleDatabase();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(DATA_DIRECTORY_STORE, 'readonly');
+      const store = tx.objectStore(DATA_DIRECTORY_STORE);
+      const request = store.get(DATA_DIRECTORY_KEY);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+      tx.oncomplete = () => db.close();
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error);
+      };
+    });
+  } catch (error) {
+    console.warn('读取已存储的目录句柄失败', error);
+    return null;
+  }
+}
+
+async function storeDirectoryHandle(handle) {
+  if (typeof window === 'undefined' || !window.indexedDB) return;
+  try {
+    const db = await openHandleDatabase();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(DATA_DIRECTORY_STORE, 'readwrite');
+      const store = tx.objectStore(DATA_DIRECTORY_STORE);
+      const request = store.put(handle, DATA_DIRECTORY_KEY);
+      request.onerror = () => reject(request.error);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error);
+      };
+    });
+  } catch (error) {
+    console.warn('保存 data 目录句柄失败', error);
+  }
+}
+
+async function clearStoredDirectoryHandle() {
+  dataDirectoryHandle = null;
+  if (typeof window === 'undefined' || !window.indexedDB) return;
+  try {
+    const db = await openHandleDatabase();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(DATA_DIRECTORY_STORE, 'readwrite');
+      const store = tx.objectStore(DATA_DIRECTORY_STORE);
+      const request = store.delete(DATA_DIRECTORY_KEY);
+      request.onerror = () => reject(request.error);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error);
+      };
+    });
+  } catch (error) {
+    console.warn('清除 data 目录句柄失败', error);
+  }
+}
+
+function openHandleDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(DATA_DIRECTORY_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(DATA_DIRECTORY_STORE)) {
+        db.createObjectStore(DATA_DIRECTORY_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function sanitizeForFileName(value) {
+  return value ? value.replace(/[^a-zA-Z0-9-_\.]/g, '_') : 'local';
+}
+
+async function restoreSavedDirectoryHandle() {
+  if (!supportsFileSystemAccess()) return;
+  const stored = await getStoredDirectoryHandle();
+  if (!stored) return;
+  const allowed = await ensureDirectoryPermission(stored);
+  if (!allowed || !isDataDirectoryHandle(stored)) {
+    await clearStoredDirectoryHandle();
+    return;
+  }
+  dataDirectoryHandle = stored;
+}
+
+async function bootstrap() {
+  await restoreSavedDirectoryHandle();
   const storedProjects = loadFromLocalStorage(STORAGE_KEYS.projects, defaultProjects);
   const storedLogs = loadFromLocalStorage(STORAGE_KEYS.logs, defaultWorkLogs);
   projects = rehydrateProjects(storedProjects, defaultProjects);
@@ -2796,4 +3061,4 @@ function bootstrap() {
   init();
 }
 
-bootstrap();
+bootstrap().catch((error) => console.error('初始化失败', error));
