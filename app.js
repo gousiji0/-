@@ -349,9 +349,9 @@ const STORAGE_KEYS = {
   logs: 'atlas-design-worklogs'
 };
 
-const SERVER_ENDPOINTS = {
-  state: './api/state'
-};
+const SERVER_ENDPOINT_CANDIDATES = ['./api/state.php', './api/state'];
+
+let activeServerEndpoint = null;
 
 let persistenceMode = 'localStorage';
 let projects = [];
@@ -2700,41 +2700,76 @@ function hasFetchSupport() {
 
 async function loadStateFromServer() {
   if (!hasFetchSupport()) return null;
-  try {
-    const response = await fetch(SERVER_ENDPOINTS.state, {
-      cache: 'no-store'
-    });
-    if (!response.ok) {
-      if (response.status === 404) {
-        return { projects: [], logs: [] };
+  for (const endpoint of SERVER_ENDPOINT_CANDIDATES) {
+    try {
+      const response = await fetch(endpoint, {
+        cache: 'no-store'
+      });
+      if (!response.ok) {
+        if (response.status === 404) {
+          continue;
+        }
+        console.warn(`服务器端点 ${endpoint} 返回状态 ${response.status}`);
+        continue;
       }
-      return null;
+      const payload = await response.json().catch(() => ({}));
+      activeServerEndpoint = endpoint;
+      return {
+        projects: Array.isArray(payload?.projects) ? payload.projects : [],
+        logs: Array.isArray(payload?.logs) ? payload.logs : []
+      };
+    } catch (error) {
+      console.warn(`读取端点 ${endpoint} 失败`, error);
     }
-    const payload = await response.json();
-    return {
-      projects: Array.isArray(payload?.projects) ? payload.projects : [],
-      logs: Array.isArray(payload?.logs) ? payload.logs : []
-    };
-  } catch (error) {
-    console.warn('服务器存档读取失败。', error);
-    return null;
   }
+  return null;
 }
 
 function saveStateToServer(payload) {
   if (!hasFetchSupport()) return Promise.resolve();
-  return fetch(SERVER_ENDPOINTS.state, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload),
-    cache: 'no-store'
-  }).then((response) => {
+  const candidates = activeServerEndpoint
+    ? [activeServerEndpoint, ...SERVER_ENDPOINT_CANDIDATES.filter((item) => item !== activeServerEndpoint)]
+    : [...SERVER_ENDPOINT_CANDIDATES];
+
+  if (!candidates.length) {
+    return Promise.reject(new Error('没有可用的服务器端点'));
+  }
+
+  let lastError = null;
+
+  const send = async (endpoint) => {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload),
+      cache: 'no-store'
+    });
     if (!response.ok) {
       throw new Error(`服务器返回异常状态码: ${response.status}`);
     }
+    activeServerEndpoint = endpoint;
     return response.json().catch(() => ({}));
+  };
+
+  let chain = send(candidates[0]).catch((error) => {
+    lastError = error;
+    return Promise.reject(error);
+  });
+
+  for (let i = 1; i < candidates.length; i += 1) {
+    const endpoint = candidates[i];
+    chain = chain.catch(() => send(endpoint).catch((error) => {
+      lastError = error;
+      return Promise.reject(error);
+    }));
+  }
+
+  return chain.catch((error) => {
+    lastError = error;
+    console.warn('所有服务器端点保存失败', error);
+    return Promise.reject(lastError || error);
   });
 }
 
