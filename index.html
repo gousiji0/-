@@ -160,6 +160,7 @@
           <div class="tag-row" id="projectTags"></div>
         <div class="summary-actions">
             <button type="button" class="ghost-button" id="editSummaryButton">编辑摘要</button>
+            <button type="button" class="ghost-button" id="editProjectButton">编辑项目信息</button>
             <label>调整项目类别
               <select id="projectTypeControl">
                 <option value="规划设计">规划设计</option>
@@ -180,6 +181,13 @@
           <div class="summary-edit-panel hidden" id="summaryEditPanel">
             <label for="summaryEditInput">项目摘要</label>
             <textarea id="summaryEditInput" rows="3" placeholder="请输入项目摘要，描述当前重点与进展"></textarea>
+            <label for="summaryStatusSelect">项目状态</label>
+            <select id="summaryStatusSelect">
+              <option value="执行中">执行中</option>
+              <option value="预警">预警</option>
+              <option value="完成">完成</option>
+              <option value="筹备">筹备</option>
+            </select>
             <div class="form-actions compact">
               <button type="button" class="primary" id="saveSummaryButton">保存摘要</button>
               <button type="button" class="ghost-button" id="cancelSummaryButton">取消</button>

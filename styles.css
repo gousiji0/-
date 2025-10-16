@@ -1421,6 +1421,17 @@ textarea {
   color: var(--text-secondary);
 }
 
+.log-header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.log-entry header .log-delete {
+  padding: 4px 12px;
+  font-size: 0.75rem;
+}
+
 .log-entry strong {
   color: var(--text-primary);
 }

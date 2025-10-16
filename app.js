@@ -349,10 +349,6 @@ const STORAGE_KEYS = {
   logs: 'atlas-design-worklogs'
 };
 
-const DATA_DIRECTORY_DB = 'atlas-board-data-dir';
-const DATA_DIRECTORY_STORE = 'handles';
-const DATA_DIRECTORY_KEY = 'data-directory';
-
 let projects = [];
 let workLogs = [];
 
@@ -360,7 +356,7 @@ let currentTypeFilter = 'all';
 let currentProjectId = null;
 let currentTimelineFilter = 'all';
 let calendarCursor = new Date();
-let dataDirectoryHandle = null;
+let editingProjectId = null;
 
 const timelineRegistry = new Map();
 let persistTimer = null;
@@ -429,8 +425,10 @@ const projectTypeControl = document.getElementById('projectTypeControl');
 const projectStatusControl = document.getElementById('projectStatusControl');
 const deleteProjectButton = document.getElementById('deleteProjectButton');
 const editSummaryButton = document.getElementById('editSummaryButton');
+const editProjectButton = document.getElementById('editProjectButton');
 const summaryEditPanel = document.getElementById('summaryEditPanel');
 const summaryEditInput = document.getElementById('summaryEditInput');
+const summaryStatusSelect = document.getElementById('summaryStatusSelect');
 const saveSummaryButton = document.getElementById('saveSummaryButton');
 const cancelSummaryButton = document.getElementById('cancelSummaryButton');
 
@@ -627,6 +625,9 @@ function clearProjectDetails() {
   if (summaryEditInput) {
     summaryEditInput.value = '';
   }
+  if (summaryStatusSelect) {
+    summaryStatusSelect.value = '执行中';
+  }
   if (projectTypeControl) {
     projectTypeControl.value = '规划设计';
   }
@@ -635,6 +636,9 @@ function clearProjectDetails() {
   }
   if (exportButton) {
     exportButton.disabled = true;
+  }
+  if (editProjectButton) {
+    editProjectButton.disabled = true;
   }
 }
 
@@ -1552,11 +1556,7 @@ function renderProjectSummary(project) {
   const summaryItems = [
     { label: '所属阶段', value: project.type, fallback: '—' },
     { label: '项目位置', value: project.location, fallback: '待定' },
-    {
-      label: '进度',
-      value: `${Math.round(project.progress * 100)}%`,
-      fallback: '0%'
-    },
+    { label: '项目状态', value: project.status, fallback: '执行中' },
     { label: '项目负责人', value: project.manager, fallback: '—' },
     { label: '甲方单位', value: project.client, fallback: '—' },
     {
@@ -1611,11 +1611,17 @@ function renderProjectSummary(project) {
   if (summaryEditInput) {
     summaryEditInput.value = project.summary || '';
   }
+  if (summaryStatusSelect) {
+    summaryStatusSelect.value = project.status || '执行中';
+  }
   if (summaryEditPanel) {
     summaryEditPanel.classList.add('hidden');
   }
   if (editSummaryButton) {
     editSummaryButton.disabled = false;
+  }
+  if (editProjectButton) {
+    editProjectButton.disabled = false;
   }
 }
 
@@ -1900,6 +1906,7 @@ function renderLogTable() {
   rows.forEach((log) => {
     const entry = document.createElement('div');
     entry.className = 'log-entry';
+    entry.dataset.logId = log.id;
     const project = projects.find((p) => p.id === log.projectId);
     const badges = [];
     if (log.asTask) badges.push('<span class="log-badge task">任务</span>');
@@ -1919,8 +1926,11 @@ function renderLogTable() {
       : '';
     entry.innerHTML = `
       <header>
-        <span>${formatDateTime(log.time)}</span>
-        <span>${project ? project.name : ''}</span>
+        <div class="log-header-info">
+          <span>${formatDateTime(log.time)}</span>
+          <span>${project ? project.name : ''}</span>
+        </div>
+        <button type="button" class="ghost-button danger log-delete" data-log-id="${log.id}">删除</button>
       </header>
       ${flagHtml}
       <div><strong>事件：</strong>${log.event}</div>
@@ -1959,11 +1969,8 @@ function setupListeners() {
   }
 
   if (loadStateButton && stateFileInput) {
-    loadStateButton.addEventListener('click', async () => {
-      const handled = await tryLoadStateFromDataDirectory();
-      if (!handled) {
-        stateFileInput.click();
-      }
+    loadStateButton.addEventListener('click', () => {
+      stateFileInput.click();
     });
     stateFileInput.addEventListener('change', handleStateFileSelection);
   }
@@ -1972,10 +1979,15 @@ function setupListeners() {
     editSummaryButton.addEventListener('click', () => {
       if (!currentProjectId || !summaryEditPanel) return;
       summaryEditPanel.classList.remove('hidden');
-      if (summaryEditInput) {
+      const project = projects.find((p) => p.id === currentProjectId);
+      if (summaryEditInput && project) {
+        summaryEditInput.value = project.summary || '';
         summaryEditInput.focus();
         const value = summaryEditInput.value || '';
         summaryEditInput.setSelectionRange(value.length, value.length);
+      }
+      if (summaryStatusSelect && project) {
+        summaryStatusSelect.value = project.status || '执行中';
       }
     });
   }
@@ -1989,6 +2001,10 @@ function setupListeners() {
         const project = projects.find((p) => p.id === currentProjectId);
         summaryEditInput.value = (project && project.summary) || '';
       }
+      if (summaryStatusSelect && currentProjectId) {
+        const project = projects.find((p) => p.id === currentProjectId);
+        summaryStatusSelect.value = (project && project.status) || '执行中';
+      }
     });
   }
 
@@ -1999,9 +2015,30 @@ function setupListeners() {
       if (!project) return;
       const nextSummary = summaryEditInput ? summaryEditInput.value.trim() : '';
       project.summary = nextSummary;
+      if (summaryStatusSelect) {
+        project.status = summaryStatusSelect.value;
+      }
       renderProjectSummary(project);
       renderProjects();
+      renderOverview();
+      renderReminders();
+      renderCalendar();
+      if (projectStatusControl) {
+        projectStatusControl.value = project.status;
+      }
+      if (summaryEditPanel) {
+        summaryEditPanel.classList.add('hidden');
+      }
       requestPersist();
+    });
+  }
+
+  if (editProjectButton) {
+    editProjectButton.addEventListener('click', () => {
+      if (!currentProjectId) return;
+      const project = projects.find((p) => p.id === currentProjectId);
+      if (!project) return;
+      openProjectForm(project);
     });
   }
 
@@ -2078,8 +2115,30 @@ function setupListeners() {
     requestPersist();
   });
 
+  if (logTable) {
+    logTable.addEventListener('click', (event) => {
+      const target = event.target.closest('.log-delete');
+      if (!target) return;
+      const { logId } = target.dataset;
+      if (!logId) return;
+      const logIndex = workLogs.findIndex((item) => item.id === logId);
+      if (logIndex === -1) return;
+      const log = workLogs[logIndex];
+      const title = log.event || formatDateTime(log.time);
+      if (!window.confirm(`确定删除工作记录「${title}」吗？`)) {
+        return;
+      }
+      workLogs.splice(logIndex, 1);
+      refreshBoardState(currentProjectId || null);
+      renderCalendar();
+      resetEventDetail();
+      requestPersist();
+    });
+  }
+
   if (addProjectButton) {
     addProjectButton.addEventListener('click', () => {
+      editingProjectId = null;
       openProjectForm();
     });
   }
@@ -2187,22 +2246,40 @@ function setupListeners() {
   updateTaskFieldVisibility();
 }
 
-function openProjectForm() {
+function openProjectForm(project = null) {
   if (!projectFormPanel) return;
   if (projectForm) {
     projectForm.reset();
   }
+  editingProjectId = project ? project.id : null;
   if (projectFormTitle) {
-    projectFormTitle.textContent = '新增项目';
+    projectFormTitle.textContent = project ? '编辑项目' : '新增项目';
   }
-  const today = new Date();
-  if (projectStartInput) {
-    projectStartInput.value = formatDateForInput(today);
-  }
-  if (projectDeadlineInput) {
-    const deadline = new Date(today.getTime());
-    deadline.setDate(deadline.getDate() + 30);
-    projectDeadlineInput.value = formatDateForInput(deadline);
+  if (project) {
+    if (projectNameInput) projectNameInput.value = project.name || '';
+    if (projectTypeInput) projectTypeInput.value = project.type || '规划设计';
+    if (projectStatusInput) projectStatusInput.value = project.status || '执行中';
+    if (projectManagerInput) projectManagerInput.value = project.manager || '';
+    if (projectClientInput) projectClientInput.value = project.client || '';
+    if (projectLocationInput) projectLocationInput.value = project.location || '';
+    if (projectStartInput) projectStartInput.value = project.start || '';
+    if (projectDeadlineInput) projectDeadlineInput.value = project.deadline || '';
+    if (projectProgressInput) {
+      projectProgressInput.value = Math.round((project.progress || 0) * 100);
+    }
+    if (projectTeamInput) projectTeamInput.value = (project.team || []).join(', ');
+    if (projectTagsInput) projectTagsInput.value = (project.tags || []).join(', ');
+    if (projectSummaryInput) projectSummaryInput.value = project.summary || '';
+  } else {
+    const today = new Date();
+    if (projectStartInput) {
+      projectStartInput.value = formatDateForInput(today);
+    }
+    if (projectDeadlineInput) {
+      const deadline = new Date(today.getTime());
+      deadline.setDate(deadline.getDate() + 30);
+      projectDeadlineInput.value = formatDateForInput(deadline);
+    }
   }
   toggleProjectForm(true);
   setTimeout(() => {
@@ -2219,6 +2296,7 @@ function toggleProjectForm(show) {
     if (projectForm) {
       projectForm.reset();
     }
+    editingProjectId = null;
   }
 }
 
@@ -2241,6 +2319,40 @@ function handleProjectFormSubmit(event) {
   const progressPercent = Number.isNaN(progressRaw)
     ? 0
     : Math.min(100, Math.max(0, progressRaw));
+  const summaryText = projectSummaryInput.value.trim();
+  const team = toArrayFromInput(projectTeamInput.value);
+  const tags = toArrayFromInput(projectTagsInput.value);
+
+  if (editingProjectId) {
+    const project = projects.find((p) => p.id === editingProjectId);
+    if (project) {
+      project.name = name;
+      project.type = type;
+      project.status = status;
+      project.progress = progressPercent / 100;
+      project.client = client;
+      project.manager = manager;
+      project.team = team;
+      project.location = location;
+      project.start = start;
+      project.deadline = deadline;
+      project.summary = summaryText;
+      project.tags = tags;
+      project.health = status === '预警' ? '受控' : project.health || '良好';
+      if (Array.isArray(project.monthlyProgress) && project.monthlyProgress.length) {
+        project.monthlyProgress[project.monthlyProgress.length - 1].completion = progressPercent;
+      }
+      toggleProjectForm(false);
+      currentTypeFilter = 'all';
+      typeFilterSelect.value = 'all';
+      refreshBoardState(project.id);
+      renderCalendar();
+      requestPersist();
+      return;
+    }
+    editingProjectId = null;
+  }
+
   const newProject = {
     id: generateProjectId(type),
     name,
@@ -2249,12 +2361,12 @@ function handleProjectFormSubmit(event) {
     progress: progressPercent / 100,
     client,
     manager,
-    team: toArrayFromInput(projectTeamInput.value),
+    team,
     location,
     start,
     deadline,
-    summary: projectSummaryInput.value.trim(),
-    tags: toArrayFromInput(projectTagsInput.value),
+    summary: summaryText,
+    tags,
     health: status === '预警' ? '受控' : '良好',
     monthlyProgress: buildInitialMonthlySnapshot(start, progressPercent),
     timeline: [],
@@ -2525,19 +2637,8 @@ async function exportBoardState() {
     logs: workLogs
   };
   const serialized = JSON.stringify(payload, null, 2);
-  const saveResult = await saveStateToPreferredDirectory(fileName, serialized);
-  if (saveResult.saved) {
-    window.alert(`已保存到 data/${fileName}`);
-    return;
-  }
-  if (saveResult.reason === 'write-error') {
-    window.alert('无法写入 data 目录，已改为下载 JSON 文件。');
-  } else if (saveResult.reason === 'no-handle') {
-    window.alert('尚未授权 data 目录，已改为下载 JSON 文件。');
-  } else if (!supportsFileSystemAccess()) {
-    window.alert('当前浏览器不支持直接写入 data 目录，已下载 JSON 文件。');
-  }
   downloadStateFile(fileName, serialized);
+  window.alert(`已导出数据：${fileName}`);
 }
 
 function handleStateFileSelection(event) {
@@ -2809,68 +2910,6 @@ function persistState() {
   return Promise.resolve();
 }
 
-async function saveStateToPreferredDirectory(fileName, contents) {
-  if (!supportsFileSystemAccess()) {
-    return { saved: false, reason: 'unsupported' };
-  }
-
-  const directory = await prepareDataDirectoryHandle();
-  if (!directory) {
-    return { saved: false, reason: 'no-handle' };
-  }
-
-  try {
-    const fileHandle = await directory.getFileHandle(fileName, { create: true });
-    const writable = await fileHandle.createWritable();
-    await writable.write(contents);
-    await writable.close();
-    return { saved: true };
-  } catch (error) {
-    console.warn('写入 data 目录失败', error);
-    if (error && error.name === 'NotAllowedError') {
-      await clearStoredDirectoryHandle();
-    }
-    return { saved: false, reason: 'write-error', error };
-  }
-}
-
-async function tryLoadStateFromDataDirectory() {
-  if (!supportsFileSystemAccess() || !window.showOpenFilePicker) {
-    return false;
-  }
-
-  const directory = await prepareDataDirectoryHandle();
-  if (!directory) {
-    return false;
-  }
-
-  try {
-    const [fileHandle] = await window.showOpenFilePicker({
-      startIn: directory,
-      types: [
-        {
-          description: 'JSON 数据文件',
-          accept: { 'application/json': ['.json'] }
-        }
-      ]
-    });
-    if (!fileHandle) return false;
-    const file = await fileHandle.getFile();
-    const text = await file.text();
-    const payload = JSON.parse(text);
-    applyImportedState(payload);
-    window.alert(`已加载 ${file.name}`);
-    return true;
-  } catch (error) {
-    if (error && error.name === 'AbortError') {
-      return false;
-    }
-    console.warn('从 data 目录读取失败', error);
-    window.alert('读取 data 目录中的文件失败，可改用“加载数据”按钮手动选择。');
-    return true;
-  }
-}
-
 function downloadStateFile(fileName, contents) {
   const blob = new Blob([contents], {
     type: 'application/json;charset=utf-8'
@@ -2882,178 +2921,11 @@ function downloadStateFile(fileName, contents) {
   setTimeout(() => URL.revokeObjectURL(link.href), 2000);
 }
 
-function supportsFileSystemAccess() {
-  return typeof window !== 'undefined' && 'showDirectoryPicker' in window;
-}
-
-async function prepareDataDirectoryHandle() {
-  if (!supportsFileSystemAccess()) return null;
-
-  if (dataDirectoryHandle) {
-    const allowed = await ensureDirectoryPermission(dataDirectoryHandle);
-    if (allowed) {
-      return dataDirectoryHandle;
-    }
-    dataDirectoryHandle = null;
-  }
-
-  const storedHandle = await getStoredDirectoryHandle();
-  if (storedHandle) {
-    const allowed = await ensureDirectoryPermission(storedHandle);
-    if (allowed && isDataDirectoryHandle(storedHandle)) {
-      dataDirectoryHandle = storedHandle;
-      return dataDirectoryHandle;
-    }
-    if (!allowed || !isDataDirectoryHandle(storedHandle)) {
-      await clearStoredDirectoryHandle();
-    }
-  }
-
-  const pickedHandle = await pickDataDirectory();
-  if (!pickedHandle) {
-    return null;
-  }
-  dataDirectoryHandle = pickedHandle;
-  await storeDirectoryHandle(pickedHandle);
-  return pickedHandle;
-}
-
-async function pickDataDirectory() {
-  try {
-    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-    if (!isDataDirectoryHandle(handle)) {
-      window.alert('请选择与页面同目录下的 data 文件夹。');
-      return null;
-    }
-    const allowed = await ensureDirectoryPermission(handle);
-    if (!allowed) {
-      window.alert('未获得对 data 目录的写入权限。');
-      return null;
-    }
-    return handle;
-  } catch (error) {
-    if (error && error.name === 'AbortError') {
-      return null;
-    }
-    console.warn('选择 data 目录失败', error);
-    return null;
-  }
-}
-
-async function ensureDirectoryPermission(handle) {
-  if (!handle || !handle.queryPermission || !handle.requestPermission) return false;
-  const current = await handle.queryPermission({ mode: 'readwrite' });
-  if (current === 'granted') return true;
-  if (current === 'denied') return false;
-  const next = await handle.requestPermission({ mode: 'readwrite' });
-  return next === 'granted';
-}
-
-function isDataDirectoryHandle(handle) {
-  return Boolean(handle && handle.kind === 'directory' && handle.name === 'data');
-}
-
-async function getStoredDirectoryHandle() {
-  if (typeof window === 'undefined' || !window.indexedDB) return null;
-  try {
-    const db = await openHandleDatabase();
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction(DATA_DIRECTORY_STORE, 'readonly');
-      const store = tx.objectStore(DATA_DIRECTORY_STORE);
-      const request = store.get(DATA_DIRECTORY_KEY);
-      request.onsuccess = () => resolve(request.result || null);
-      request.onerror = () => reject(request.error);
-      tx.oncomplete = () => db.close();
-      tx.onabort = () => {
-        db.close();
-        reject(tx.error);
-      };
-    });
-  } catch (error) {
-    console.warn('读取已存储的目录句柄失败', error);
-    return null;
-  }
-}
-
-async function storeDirectoryHandle(handle) {
-  if (typeof window === 'undefined' || !window.indexedDB) return;
-  try {
-    const db = await openHandleDatabase();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(DATA_DIRECTORY_STORE, 'readwrite');
-      const store = tx.objectStore(DATA_DIRECTORY_STORE);
-      const request = store.put(handle, DATA_DIRECTORY_KEY);
-      request.onerror = () => reject(request.error);
-      tx.oncomplete = () => {
-        db.close();
-        resolve();
-      };
-      tx.onabort = () => {
-        db.close();
-        reject(tx.error);
-      };
-    });
-  } catch (error) {
-    console.warn('保存 data 目录句柄失败', error);
-  }
-}
-
-async function clearStoredDirectoryHandle() {
-  dataDirectoryHandle = null;
-  if (typeof window === 'undefined' || !window.indexedDB) return;
-  try {
-    const db = await openHandleDatabase();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(DATA_DIRECTORY_STORE, 'readwrite');
-      const store = tx.objectStore(DATA_DIRECTORY_STORE);
-      const request = store.delete(DATA_DIRECTORY_KEY);
-      request.onerror = () => reject(request.error);
-      tx.oncomplete = () => {
-        db.close();
-        resolve();
-      };
-      tx.onabort = () => {
-        db.close();
-        reject(tx.error);
-      };
-    });
-  } catch (error) {
-    console.warn('清除 data 目录句柄失败', error);
-  }
-}
-
-function openHandleDatabase() {
-  return new Promise((resolve, reject) => {
-    const request = window.indexedDB.open(DATA_DIRECTORY_DB, 1);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(DATA_DIRECTORY_STORE)) {
-        db.createObjectStore(DATA_DIRECTORY_STORE);
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
 function sanitizeForFileName(value) {
   return value ? value.replace(/[^a-zA-Z0-9-_\.]/g, '_') : 'local';
 }
 
-async function restoreSavedDirectoryHandle() {
-  if (!supportsFileSystemAccess()) return;
-  const stored = await getStoredDirectoryHandle();
-  if (!stored) return;
-  const allowed = await ensureDirectoryPermission(stored);
-  if (!allowed || !isDataDirectoryHandle(stored)) {
-    await clearStoredDirectoryHandle();
-    return;
-  }
-  dataDirectoryHandle = stored;
-}
-
 async function bootstrap() {
-  await restoreSavedDirectoryHandle();
   const storedProjects = loadFromLocalStorage(STORAGE_KEYS.projects, defaultProjects);
   const storedLogs = loadFromLocalStorage(STORAGE_KEYS.logs, defaultWorkLogs);
   projects = rehydrateProjects(storedProjects, defaultProjects);
