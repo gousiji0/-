@@ -349,6 +349,10 @@ const STORAGE_KEYS = {
   logs: 'atlas-design-worklogs'
 };
 
+const SERVER_ENDPOINTS = {
+  state: './api/state'
+};
+
 let persistenceMode = 'localStorage';
 let projects = [];
 let workLogs = [];
@@ -2690,6 +2694,50 @@ function loadFromLocalStorage(key, fallback) {
   }
 }
 
+function hasFetchSupport() {
+  return typeof window !== 'undefined' && typeof window.fetch === 'function';
+}
+
+async function loadStateFromServer() {
+  if (!hasFetchSupport()) return null;
+  try {
+    const response = await fetch(SERVER_ENDPOINTS.state, {
+      cache: 'no-store'
+    });
+    if (!response.ok) {
+      if (response.status === 404) {
+        return { projects: [], logs: [] };
+      }
+      return null;
+    }
+    const payload = await response.json();
+    return {
+      projects: Array.isArray(payload?.projects) ? payload.projects : [],
+      logs: Array.isArray(payload?.logs) ? payload.logs : []
+    };
+  } catch (error) {
+    console.warn('服务器存档读取失败。', error);
+    return null;
+  }
+}
+
+function saveStateToServer(payload) {
+  if (!hasFetchSupport()) return Promise.resolve();
+  return fetch(SERVER_ENDPOINTS.state, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload),
+    cache: 'no-store'
+  }).then((response) => {
+    if (!response.ok) {
+      throw new Error(`服务器返回异常状态码: ${response.status}`);
+    }
+    return response.json().catch(() => ({}));
+  });
+}
+
 function setupAutoSave() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
   window.addEventListener('beforeunload', () => requestPersist(true));
@@ -2703,6 +2751,12 @@ function setupAutoSave() {
 function persistState() {
   if (persistenceMode === 'electron' && window.electronAPI && window.electronAPI.saveState) {
     return window.electronAPI.saveState({
+      projects,
+      logs: workLogs
+    });
+  }
+  if (persistenceMode === 'server') {
+    return saveStateToServer({
       projects,
       logs: workLogs
     });
@@ -2737,6 +2791,15 @@ async function bootstrap() {
     }
   }
 
+  if (persistenceMode !== 'electron') {
+    const serverState = await loadStateFromServer();
+    if (serverState) {
+      projectState = serverState.projects;
+      logState = serverState.logs;
+      persistenceMode = 'server';
+    }
+  }
+
   if (persistenceMode === 'localStorage') {
     const fallbackProjects = loadFromLocalStorage(STORAGE_KEYS.projects, defaultProjects);
     const fallbackLogs = loadFromLocalStorage(STORAGE_KEYS.logs, defaultWorkLogs);
@@ -2752,7 +2815,7 @@ async function bootstrap() {
 
   init();
 
-  if (persistenceMode === 'electron' && (!projectState || !projectState.length || !logState || !logState.length)) {
+  if ((persistenceMode === 'electron' || persistenceMode === 'server') && (!projectState || !projectState.length || !logState || !logState.length)) {
     requestPersist(true);
   }
 }
